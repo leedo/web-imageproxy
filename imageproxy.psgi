@@ -1,8 +1,8 @@
 use Plack::Builder;
 use lib 'lib';
-use Plack::App::ImageProxy;
+use Web::ImageProxy;
 
-my $app = Plack::App::ImageProxy->new;
+my $app = Web::ImageProxy->new;
 
 builder {
   mount '/' => $app->to_app;

@@ -1,4 +1,4 @@
-package Plack::App::ImageProxy;
+package Web::ImageProxy;
 
 use strict;
 use warnings;
