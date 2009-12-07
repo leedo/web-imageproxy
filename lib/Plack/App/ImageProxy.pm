@@ -3,56 +3,29 @@ package Plack::App::ImageProxy;
 use strict;
 use warnings;
 
+use parent 'Plack::Middleware';
 use Path::Class qw/dir/;
 use Cache::File;
 use AnyEvent::HTTP;
 use Image::Magick;
 use Storable qw/freeze thaw/;
 
-use Moose;
-use MooseX::NonMoose;
-use MooseX::Types::Path::Class;
+__PACKAGE__->mk_ro_accessors(qw/cache locks/);
+__PACKAGE__->mk_accessors(qw/cache_root max_size req_headers/);
 
-extends 'Plack::Middleware';
-
-has cache_root => (
-  is => 'ro',
-  isa => 'Path::Class::Dir',
-  required => 1,
-  coerce => 1,
-  default => sub {dir('./cache/images/')},
-);
-
-has cache => (
-  is => 'ro',
-  isa => 'Cache::File',
-  lazy => 1,
-  default => sub {
-    Cache::File->new(cache_root => $_[0]->cache_root->absolute);
-  }
-);
-
-has max_size => (
-  is => 'ro',
-  isa => 'Int',
-  default => 2097152
-);
-
-has req_headers => (
-  is => 'ro',
-  isa => 'HashRef',
-  default => sub {
-    {
+my $default_headers = {
       "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
-    }
-  }
-);
+};
 
-has response_locks => (
-  is => 'rw',
-  isa => 'HashRef[CodeRef]',
-  default => sub {{}},
-);
+sub new {
+  my ($class, %args) = @_;
+  $args{locks} = {};
+  $args{req_headers} = $default_headers;
+  $args{max_size} = 2097152;
+  $args{cache} = Cache::File->new(
+    cache_root => $args{cache_root} || './cache/images/');
+  $class->SUPER::new(%args);
+}
 
 sub call {
   my ($self, $env) = @_;
@@ -168,35 +141,27 @@ sub lock_respond {
 
 sub has_lock {
   my ($self, $url) = @_;
-  exists $self->response_locks->{$url};
-}
-
-sub locks {
-  my ($self, $url) = @_;
-  keys %{$self->response_locks};
+  exists $self->locks->{$url};
 }
 
 sub get_lock_callbacks {
   my ($self, $url) = @_;
-  @{$self->response_locks->{$url}};
+  @{$self->locks->{$url}};
 }
 
 sub add_lock_callback {
   my ($self, $url, $cb) = @_;
   if ($self->has_lock($url)) {
-    push @{$self->response_locks->{$url}}, $cb;
+    push @{$self->locks->{$url}}, $cb;
   }
   else {
-    $self->response_locks->{$url} = [$cb];
+    $self->locks->{$url} = [$cb];
   }
 }
 
 sub remove_lock {
   my ($self, $url) = @_;
-  delete $self->response_locks->{$url};
+  delete $self->locks->{$url};
 }
-
-__PACKAGE__->meta->make_immutable;
-no Moose;
 
 1;
