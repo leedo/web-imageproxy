@@ -5,8 +5,6 @@ use warnings;
 
 use Path::Class qw/dir/;
 use Cache::File;
-use Plack::Request;
-use Plack::Response;
 use AnyEvent::HTTP;
 use Image::Magick;
 use Storable qw/freeze thaw/;
@@ -58,9 +56,8 @@ has response_locks => (
 
 sub call {
   my ($self, $env) = @_;
-  my $req = Plack::Request->new($env);
-  my $url = $req->uri->path;
-  $url =~ s/^\///;
+  my $url = ($env->{'SCRIPT_NAME'} || '/') . ($env->{'PATH_INFO'} || '');
+  $url =~ s/^\/+//;
   if ($self->has_lock($url)) { # downloading
     return sub {
       my $cb = shift;
@@ -69,11 +66,7 @@ sub call {
   }
   elsif (my $data = $self->cache->get($url)) {
     my ($mime, $body) = @{ thaw $data };
-    my $res = $req->new_response;
-    $res->status(200);
-    $res->content_type($mime);
-    $res->body($body);
-    return $res->finalize;
+    return [200,["Content-Type", $mime],[$body]];
   }
   else { # new download
     return sub {
@@ -119,11 +112,7 @@ sub complete {
   else {
     if (my $mime = $self->get_mime($body, $url)) {
       $self->lock_respond($url, sub {
-        my $res = Plack::Response->new;
-        $res->status(200);
-        $res->content_type($mime);
-        $res->body($body);
-        $res->finalize;
+        [200, ["Content-Type", $mime], [$body]];
       });
       $self->cache->set($url, freeze [$mime, $body]);
     }
@@ -161,12 +150,9 @@ sub check_headers {
 
 sub error {
   my ($self, $error, $url) = @_;
+  $error = "error: $error";
   $self->lock_respond($url, sub {
-    my $res = Plack::Response->new;
-    $res->status(404);
-    $res->content_type("text/plain");
-    $res->body("error: $error");
-    $res->finalize;
+    [404, ["Content-Type", "text/plain"], [$error]];
   });
 }
 
