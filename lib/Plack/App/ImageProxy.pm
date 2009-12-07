@@ -3,9 +3,10 @@ package Plack::App::ImageProxy;
 use strict;
 use warnings;
 
-use Digest::MD5 qw/md5_hex/;
 use Path::Class qw/dir/;
+use Cache::File;
 use Plack::Request;
+use Plack::Response;
 use AnyEvent::HTTP;
 
 use Moose;
@@ -20,6 +21,15 @@ has cache_root => (
   required => 1,
   coerce => 1,
   default => sub {dir('./cache/images/')},
+);
+
+has cache => (
+  is => 'ro',
+  isa => 'Cache::File',
+  lazy => 1,
+  default => sub {
+    Cache::File->new(cache_root => $_[0]->cache_root->absolute);
+  }
 );
 
 has max_size => (
@@ -40,95 +50,94 @@ has req_headers => (
 
 has response_locks => (
   is => 'rw',
-  isa => 'HashRef[ArrayRef]',
+  isa => 'HashRef[CodeRef]',
   default => sub {{}},
 );
 
 sub call {
   my ($self, $env) = @_;
   my $req = Plack::Request->new($env);
-  my $res = $req->new_response;
-  my $path = $req->uri->path;
-  $path =~ s/^\///;
-  my $uri = URI->new($path);
-  my $hash = md5_hex $path;
-  if ($self->has_lock($hash)) { # downloading
+  my $url = $req->uri->path;
+  $url =~ s/^\///;
+  if ($self->has_lock($url)) { # downloading
     return sub {
       my $cb = shift;
-      $self->add_lock_response($hash, [$res, $cb])
+      $self->add_lock_callback($url, $cb);
     };
   }
-  elsif ($self->cache_root->contains($self->cache_root->file($hash))) { #exists
+  elsif (my $image = $self->cache->get($url)) {
+    my $res = $req->new_response;
     $res->status(200);
     $res->content_type("image/jpeg");
-    $res->body($self->cache_root->file($hash)->openr);
-    $res->finalize;
+    $res->body($image);
+    return $res->finalize;
   }
   else { # new download
     return sub {
       my $cb = shift;
-      $self->add_lock_response($hash, [$res, $cb]); 
-      $self->download($uri, $hash);
+      $self->add_lock_callback($url, $cb); 
+      $self->download($url);
     };
   }
 }
 
-
 sub download {
-  my ($self, $uri, $hash) = @_;
-  if ($uri->scheme and $uri->scheme eq "http") {
-    http_get $uri->as_string,
+  my ($self, $url) = @_;
+  if ($url and $url =~ /^http:\/\//) {
+    http_get $url,
       headers => $self->req_headers,
-      on_header => sub {$self->check_headers(@_, $hash)},
-      sub {$self->complete(@_, $hash)};
+      on_header => sub {$self->check_headers(@_, $url)},
+      # TODO add an on_body handler that stops after it
+      # passes the max_size setting
+      sub {$self->complete(@_, $url)};
   }
   else {
-    $self->error("invalid url", $hash);
+    $self->error("invalid url: $url", $url);
   }
 }
 
 sub complete {
-  my ($self, $body, $headers, $hash) = @_;
+  my ($self, $body, $headers, $url) = @_;
   return if $headers->{Status} == 598;
-  if ($body) {
-    my $file = $self->cache_root->file($hash);
-    my $fh = $file->openw;
-    print $fh $body;
-    close $fh;
-    $self->lock_respond($hash, sub {
-      my $res = shift;
-      $res->status(200);
-      $res->content_type("image/jpeg");
-      $res->body($file->openr);
-      $res->finalize;
-    });
+  if (!$body) {
+    $self->error("empty response body", $url);
+  }
+  elsif ($body > $self->max_size) {
+    $self->error("too large", $url);
   }
   else {
-    $self->error("empty response body", $hash);
+    $self->lock_respond($url, sub {
+      my $res = Plack::Response->new;
+      $res->status(200);
+      $res->content_type("image/jpeg");
+      $res->body($body);
+      $res->finalize;
+    });
+    $self->cache->set($url, $body);
   }
 }
 
 sub check_headers {
-  my ($self, $headers, $hash) = @_;
+  my ($self, $headers, $url) = @_;
   if ($headers->{Status} != 200) {
-    $self->error("got $headers->{Status}", $hash);
+    $self->error("got $headers->{Status}", $url);
     return 0;
   }
   if ($headers->{'content-length'} and $headers->{'content-length'} > $self->max_size) {
-    $self->error("too large", $hash);
+    $self->error("too large", $url);
     return 0;
   }
   elsif ($headers->{'content-type'} and $headers->{'content-type'} !~ /^image/) {
-    $self->error("invalid content type", $hash);
+    $self->error("invalid content type", $url);
     return 0;
   }
   return 1;
 }
 
 sub error {
-  my ($self, $error, $hash) = @_;
-  $self->lock_respond($hash, sub {
-    my $res = shift;
+  my ($self, $error, $url) = @_;
+  $self->lock_respond($url, sub {
+    my $res = Plack::Response->new;
     $res->status(404);
     $res->content_type("text/plain");
     $res->body("error: $error");
@@ -137,45 +146,43 @@ sub error {
 }
 
 sub lock_respond {
-  my ($self, $hash, $cb) = @_;
-  if ($self->has_lock($hash)) {
-    for my $res ($self->get_lock_responses($hash)) {
-      $res->[1]->(
-        $cb->($res->[0])
-      );
+  my ($self, $url, $cb) = @_;
+  if ($self->has_lock($url)) {
+    for my $lock_cb ($self->get_lock_callbacks($url)) {
+      $lock_cb->( $cb->());
     }
-    $self->remove_lock($hash);
+    $self->remove_lock($url);
   }
 }
 
 sub has_lock {
-  my ($self, $hash) = @_;
-  exists $self->response_locks->{$hash};
+  my ($self, $url) = @_;
+  exists $self->response_locks->{$url};
 }
 
 sub locks {
-  my ($self, $hash) = @_;
+  my ($self, $url) = @_;
   keys %{$self->response_locks};
 }
 
-sub get_lock_responses {
-  my ($self, $hash) = @_;
-  @{$self->response_locks->{$hash}};
+sub get_lock_callbacks {
+  my ($self, $url) = @_;
+  @{$self->response_locks->{$url}};
 }
 
-sub add_lock_response {
-  my ($self, $hash, $res) = @_;
-  if ($self->has_lock($hash)) {
-    push @{$self->response_locks->{$hash}}, $res;
+sub add_lock_callback {
+  my ($self, $url, $cb) = @_;
+  if ($self->has_lock($url)) {
+    push @{$self->response_locks->{$url}}, $cb;
   }
   else {
-    $self->response_locks->{$hash} = [$res];
+    $self->response_locks->{$url} = [$cb];
   }
 }
 
 sub remove_lock {
-  my ($self, $hash) = @_;
-  delete $self->response_locks->{$hash};
+  my ($self, $url) = @_;
+  delete $self->response_locks->{$url};
 }
 
 __PACKAGE__->meta->make_immutable;
