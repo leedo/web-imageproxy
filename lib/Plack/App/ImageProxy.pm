@@ -84,12 +84,20 @@ sub call {
 sub download {
   my ($self, $url) = @_;
   if ($url and $url =~ /^http:\/\//) {
+    my $body;
     http_get $url,
       headers => $self->req_headers,
       on_header => sub {$self->check_headers(@_, $url)},
-      # TODO add an on_body handler that stops after it
-      # passes the max_size setting
-      sub {$self->complete(@_, $url)};
+      on_body => sub {
+        my ($partial, $headers) = @_;
+        $body .= $partial;
+        if (length($body) > $self->max_size) {
+          $self->error("too large", $url);
+          return 0;
+        }
+        return 1;
+      },
+      sub {$self->complete($body, $_[1], $url)};
   }
   else {
     $self->error("invalid url: $url", $url);
@@ -102,7 +110,7 @@ sub complete {
   if (!$body) {
     $self->error("empty response body", $url);
   }
-  elsif ($body > $self->max_size) {
+  elsif (length($body) > $self->max_size) {
     $self->error("too large", $url);
   }
   else {
