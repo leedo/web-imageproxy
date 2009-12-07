@@ -9,6 +9,7 @@ use Plack::Request;
 use Plack::Response;
 use AnyEvent::HTTP;
 use Image::Magick;
+use Storable qw/freeze thaw/;
 
 use Moose;
 use MooseX::NonMoose;
@@ -66,14 +67,13 @@ sub call {
       $self->add_lock_callback($url, $cb);
     };
   }
-  elsif (my $image = $self->cache->get($url)) {
-    if (my $mime = $self->get_mime($image, $url)) {
-      my $res = $req->new_response;
-      $res->status(200);
-      $res->content_type($mime);
-      $res->body($image);
-      return $res->finalize;
-    }
+  elsif (my $data = $self->cache->get($url)) {
+    my ($mime, $body) = @{ thaw $data };
+    my $res = $req->new_response;
+    $res->status(200);
+    $res->content_type($mime);
+    $res->body($body);
+    return $res->finalize;
   }
   else { # new download
     return sub {
@@ -125,7 +125,7 @@ sub complete {
         $res->body($body);
         $res->finalize;
       });
-      $self->cache->set($url, $body);
+      $self->cache->set($url, freeze [$mime, $body]);
     }
   }
 }
