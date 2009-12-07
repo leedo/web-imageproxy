@@ -56,7 +56,7 @@ has response_locks => (
 
 sub call {
   my ($self, $env) = @_;
-  my $url = ($env->{'SCRIPT_NAME'} || '/') . ($env->{'PATH_INFO'} || '');
+  my $url = $env->{'PATH_INFO'} || '';
   $url =~ s/^\/+//;
   if ($self->has_lock($url)) { # downloading
     return sub {
