@@ -8,6 +8,7 @@ use Cache::File;
 use Plack::Request;
 use Plack::Response;
 use AnyEvent::HTTP;
+use Image::Magick;
 
 use Moose;
 use MooseX::NonMoose;
@@ -66,11 +67,13 @@ sub call {
     };
   }
   elsif (my $image = $self->cache->get($url)) {
-    my $res = $req->new_response;
-    $res->status(200);
-    $res->content_type("image/jpeg");
-    $res->body($image);
-    return $res->finalize;
+    if (my $mime = $self->get_mime($image, $url)) {
+      my $res = $req->new_response;
+      $res->status(200);
+      $res->content_type($mime);
+      $res->body($image);
+      return $res->finalize;
+    }
   }
   else { # new download
     return sub {
@@ -114,15 +117,29 @@ sub complete {
     $self->error("too large", $url);
   }
   else {
-    $self->lock_respond($url, sub {
-      my $res = Plack::Response->new;
-      $res->status(200);
-      $res->content_type("image/jpeg");
-      $res->body($body);
-      $res->finalize;
-    });
-    $self->cache->set($url, $body);
+    if (my $mime = $self->get_mime($body, $url)) {
+      $self->lock_respond($url, sub {
+        my $res = Plack::Response->new;
+        $res->status(200);
+        $res->content_type($mime);
+        $res->body($body);
+        $res->finalize;
+      });
+      $self->cache->set($url, $body);
+    }
   }
+}
+
+sub get_mime {
+  my ($self, $blob, $url) = @_;
+  my $image = Image::Magick->new;
+  $image->BlobToImage($blob);
+  my $mime = $image->Get('mime');
+  if ($mime !~ /^image/) {
+    $self->error("not an image", $url);
+    return undef;
+  }
+  return $mime;
 }
 
 sub check_headers {
