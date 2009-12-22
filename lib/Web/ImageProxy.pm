@@ -3,33 +3,79 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
-use parent 'Plack::Middleware';
 use Path::Class qw/dir/;
 use Cache::File;
+use URI::Escape;
 use AnyEvent::HTTP;
 use Image::Magick;
 use Storable qw/freeze thaw/;
+use Any::Moose;
 
-__PACKAGE__->mk_ro_accessors(qw/cache locks/);
-__PACKAGE__->mk_accessors(qw/cache_root max_size req_headers/);
+has cache => (
+  is => 'ro',
+  isa => 'Cache::File',
+  lazy => 1,
+  default => sub {
+    Cache::File->new(cache_root => $_[0]->cache_root);
+  }
+);
 
-my $default_headers = {
-      "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
-};
+has locks => (
+  is => 'ro',
+  isa => 'HashRef',
+  default => sub {{}},
+);
 
-sub new {
-  my ($class, %args) = @_;
-  $args{locks} = {};
-  $args{req_headers} = $default_headers;
-  $args{max_size} = 2097152;
-  $args{cache} = Cache::File->new(
-    cache_root => $args{cache_root} || './cache/images/');
-  $class->SUPER::new(%args);
+has cache_root => (
+  is => 'ro',
+  isa => 'Str',
+  default => sub {dir('./cache/images')->absolute->stringify}
+);
+
+has max_size => (
+  is => 'ro',
+  isa => 'Int',
+  default => 2097152,
+);
+
+has req_headers => (
+  is => 'ro',
+  isa => 'HashRef',
+  default => sub {
+    {"User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3"}
+  }
+);
+
+has toolarge => (
+  is => 'ro',
+  default => sub {
+    open my $img, '<', 'static/image/TooLarge.gif';
+    my @lines = <$img>;
+    close $img;
+    return join '', @lines;
+  }
+);
+
+has badformat => (
+  is => 'ro',
+  default => sub {
+    open my $img, '<', 'static/image/BadFormat.gif';
+    my @lines = <$img>;
+    close $img;
+    return join '', @lines;
+  }
+);
+
+sub to_app {
+  my $self = shift;
+  return sub {
+    $self->call(@_);
+  };
 }
 
 sub call {
   my ($self, $env) = @_;
-  my $url = $env->{'PATH_INFO'} || '';
+  my $url = uri_escape($env->{'PATH_INFO'}, " ") || '';
   $url =~ s/^\/+//;
   if ($self->has_lock($url)) { # downloading
     return sub {
@@ -52,18 +98,21 @@ sub call {
 
 sub download {
   my ($self, $url) = @_;
-  if ($url and $url =~ /^http:\/\//) {
-    my $body;
+  if ($url and $url =~ /^https?:\/\//) {
+    my $body = '';
+    my $length = 0;
     http_get $url,
       headers => $self->req_headers,
       on_header => sub {$self->check_headers(@_, $url)},
       on_body => sub {
         my ($partial, $headers) = @_;
-        $body .= $partial;
-        if (length($body) > $self->max_size) {
-          $self->error("too large", $url);
+        my $tmp_length = $length + length($partial);
+        if ($tmp_length > $self->max_size) {
+          $self->complete($self->toolarge, $headers, $url);
           return 0;
         }
+        $body .= $partial;
+        $length = $tmp_length;
         return 1;
       },
       sub {$self->complete($body, $_[1], $url)};
@@ -75,20 +124,20 @@ sub download {
 
 sub complete {
   my ($self, $body, $headers, $url) = @_;
-  return if $headers->{Status} == 598;
+  return if $headers->{Status} and $headers->{Status} == 598;
   if (!$body) {
-    $self->error("empty response body", $url);
+    $self->complete($self->badformat,
+      {'Content-Type','image/gif'}, $url);
+    return
   }
   elsif (length($body) > $self->max_size) {
-    $self->error("too large", $url);
+    $body = $self->toolarge;
   }
-  else {
-    if (my $mime = $self->get_mime($body, $url)) {
-      $self->lock_respond($url, sub {
-        [200, ["Content-Type", $mime], [$body]];
-      });
-      $self->cache->set($url, freeze [$mime, $body]);
-    }
+  if (my $mime = $self->get_mime($body, $url)) {
+    $self->lock_respond($url, sub {
+      [200, ["Content-Type", $mime], [$body]];
+    });
+    $self->cache->set($url, freeze [$mime, $body]);
   }
 }
 
@@ -97,8 +146,10 @@ sub get_mime {
   my $image = Image::Magick->new;
   $image->BlobToImage($blob);
   my $mime = $image->Get('mime');
+  undef $image;
   if ($mime !~ /^image/) {
-    $self->error("not an image", $url);
+    $self->complete($self->badformat,
+      {'Content-Type','image/gif'}, $url);
     return undef;
   }
   return $mime;
@@ -107,15 +158,17 @@ sub get_mime {
 sub check_headers {
   my ($self, $headers, $url) = @_;
   if ($headers->{Status} != 200) {
-    $self->error("got $headers->{Status}", $url);
+    $self->error("got $headers->{Status} for $url", $url);
     return 0;
   }
   if ($headers->{'content-length'} and $headers->{'content-length'} > $self->max_size) {
-    $self->error("too large", $url);
+    $self->complete($self->toolarge,
+      {'Content-Type','image/gif'}, $url);
     return 0;
   }
   elsif ($headers->{'content-type'} and $headers->{'content-type'} !~ /^image/) {
-    $self->error("invalid content type", $url);
+    $self->complete($self->badformat,
+      {'Content-Type','image/gif'}, $url);
     return 0;
   }
   return 1;
