@@ -3,20 +3,17 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
-use Path::Class qw/dir/;
-use Cache::File;
+use CHI;
+use Path::Class qw/dir file/;
 use URI::Escape;
 use AnyEvent::HTTP;
-use Image::Magick;
-use Storable qw/freeze thaw/;
 use Any::Moose;
 
 has cache => (
   is => 'ro',
-  isa => 'Cache::File',
   lazy => 1,
   default => sub {
-    Cache::File->new(cache_root => $_[0]->cache_root);
+    CHI->new(driver => "File", root_dir => $_[0]->cache_root);
   }
 );
 
@@ -49,20 +46,36 @@ has req_headers => (
 has toolarge => (
   is => 'ro',
   default => sub {
-    open my $img, '<', 'static/image/TooLarge.gif';
-    my @lines = <$img>;
-    close $img;
-    return join '', @lines;
+    my $file = file("static/image/TooLarge.gif");
+    [
+      200,
+      ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
+      $file->openr
+    ];
   }
 );
 
 has badformat => (
   is => 'ro',
   default => sub {
-    open my $img, '<', 'static/image/BadFormat.gif';
-    my @lines = <$img>;
-    close $img;
-    return join '', @lines;
+    my $file = file('static/image/BadFormat.gif');
+    [
+      200,
+      ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
+      $file->openr
+    ];
+  }
+);
+
+has cannotread => (
+  is => 'ro',
+  default => sub {
+    my $file = file('static/image/CannotRead.gif');
+    [
+      200,
+      ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
+      $file->openr
+    ];
   }
 );
 
@@ -75,100 +88,101 @@ sub to_app {
 
 sub call {
   my ($self, $env) = @_;
-  my $url = uri_escape($env->{'PATH_INFO'}, " ") || '';
-  $url =~ s/^\/+//;
+
+  my $url = build_url($env);
+  return $self->cannotread unless $url;
+
   if ($self->has_lock($url)) { # downloading
     return sub {
       my $cb = shift;
       $self->add_lock_callback($url, $cb);
     };
   }
-  elsif (my $data = $self->cache->get($url)) {
-    my ($mime, $body) = @{ thaw $data };
-    return [200,["Content-Type", $mime],[$body]];
+
+  my $file = file($self->cache->path_to_key($url));
+  my $meta = $self->cache->get("$url-meta");
+
+  if ($meta) { # info cached
+    my $resp;
+    if (my $error = $meta->{error}) {
+      return $self->$error;
+    }
+    elsif ($meta->{headers} and -e $file->absolute->stringify) {
+      return [200, $meta->{headers}, $file->openr];
+    }
   }
-  else { # new download
-    return sub {
-      my $cb = shift;
-      $self->add_lock_callback($url, $cb); 
-      $self->download($url);
-    };
-  }
+
+  return sub { # new download
+    my $cb = shift;
+    $self->add_lock_callback($url, $cb); 
+    $self->download($url);
+  };
 }
 
 sub download {
   my ($self, $url) = @_;
-  if ($url and $url =~ /^https?:\/\//) {
-    my $body = '';
-    my $length = 0;
-    http_get $url,
-      headers => $self->req_headers,
-      on_header => sub {$self->check_headers(@_, $url)},
-      on_body => sub {
-        my ($partial, $headers) = @_;
-        my $tmp_length = $length + length($partial);
-        if ($tmp_length > $self->max_size) {
-          $self->complete($self->toolarge, $headers, $url);
-          return 0;
+  my $length = 0;
+  my $cache = file($self->cache->path_to_key($url));
+  $cache->parent->mkpath;
+  my $req; $req = http_get $url,
+    headers => $self->req_headers,
+    on_header => sub {$self->check_headers(@_, $url)},
+    timeout => 60,
+    want_body_handle => 1,
+    sub {
+      my ($handle, $headers) = @_;
+      return unless $handle;
+      my $fh = $cache->openw;
+      $handle->on_read(sub {
+        my $data = delete $_[0]->{rbuf};
+        $length += length $data;
+        if ($length > $self->max_size) {
+          $self->lock_respond($url, $self->toolarge);
+          $cache->remove;
+          $handle->destroy;
+          undef $handle;
+          undef $req;
         }
-        $body .= $partial;
-        $length = $tmp_length;
-        return 1;
-      },
-      sub {$self->complete($body, $_[1], $url)};
-  }
-  else {
-    $self->error("invalid url: $url", $url);
-  }
-}
-
-sub complete {
-  my ($self, $body, $headers, $url) = @_;
-  return if $headers->{Status} and $headers->{Status} == 598;
-  if (!$body) {
-    $self->complete($self->badformat,
-      {'Content-Type','image/gif'}, $url);
-    return
-  }
-  elsif (length($body) > $self->max_size) {
-    $body = $self->toolarge;
-  }
-  if (my $mime = $self->get_mime($body, $url)) {
-    $self->lock_respond($url, sub {
-      [200, ["Content-Type", $mime], [$body]];
-    });
-    $self->cache->set($url, freeze [$mime, $body]);
-  }
-}
-
-sub get_mime {
-  my ($self, $blob, $url) = @_;
-  my $image = Image::Magick->new;
-  $image->BlobToImage($blob);
-  my $mime = $image->Get('mime');
-  undef $image;
-  if ($mime !~ /^image/) {
-    $self->complete($self->badformat,
-      {'Content-Type','image/gif'}, $url);
-    return undef;
-  }
-  return $mime;
+        else {
+          print $fh $data;
+        }
+      });
+      $handle->on_error(sub{
+        $self->lock_respond($url, $self->cannotread);
+        $handle->destroy;
+        undef $handle;
+        undef $req;
+      });
+      $handle->on_eof(sub {
+        $handle->destroy;
+        undef $handle;
+        undef $req;
+        $fh = file($self->cache->path_to_key($url))->openr;
+        my $headers = [
+          "Content-Type" => $headers->{'content-type'},
+          "Content-Length" => $length
+        ];
+        $self->cache->set("$url-meta", {headers => $headers});
+        $self->lock_respond($url,[200, $headers, $fh]);
+      });
+    }
 }
 
 sub check_headers {
   my ($self, $headers, $url) = @_;
+  my ($length, $type) = @$headers{'content-length', 'content-type'};
   if ($headers->{Status} != 200) {
-    $self->error("got $headers->{Status} for $url", $url);
+    $self->lock_respond($url, $self->cannotread);
     return 0;
   }
-  if ($headers->{'content-length'} and $headers->{'content-length'} > $self->max_size) {
-    $self->complete($self->toolarge,
-      {'Content-Type','image/gif'}, $url);
+  if ($length and $length > $self->max_size) {
+    $self->lock_respond($url, $self->toolarge);
+    $self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
-  elsif ($headers->{'content-type'} and $headers->{'content-type'} !~ /^image/) {
-    $self->complete($self->badformat,
-      {'Content-Type','image/gif'}, $url);
+  if (!$type or $type !~ /^image/) {
+    $self->lock_respond($url, $self->badformat);
+    $self->cache->set("$url-meta", {error => "badformat"});
     return 0;
   }
   return 1;
@@ -177,16 +191,25 @@ sub check_headers {
 sub error {
   my ($self, $error, $url) = @_;
   $error = "error: $error";
-  $self->lock_respond($url, sub {
-    [404, ["Content-Type", "text/plain"], [$error]];
-  });
+  $self->lock_respond($url, [404, ["Content-Type", "text/plain"], [$error]]);
+}
+
+sub build_url {
+  my $env = shift;
+  my $base_path = $env->{SCRIPT_NAME} || '/';
+  my $url = $base_path . ($env->{PATH_INFO} || '');
+  $url =~ s{^/+}{};
+  $url = "http://$url" unless $url =~ /^https?/;
+  $url .= ($env->{QUERY_STRING} ? "?$env->{QUERY_STRING}" : "");
+  $url =~ s/\s/%20/g;
+  return $url;
 }
 
 sub lock_respond {
-  my ($self, $url, $cb) = @_;
+  my ($self, $url, $res) = @_;
   if ($self->has_lock($url)) {
     for my $lock_cb ($self->get_lock_callbacks($url)) {
-      $lock_cb->( $cb->());
+      $lock_cb->( $res);
     }
     $self->remove_lock($url);
   }
