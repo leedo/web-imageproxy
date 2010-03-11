@@ -121,16 +121,27 @@ sub call {
 
 sub download {
   my ($self, $url) = @_;
+  my $req;
   my $length = 0;
   my $cache = file($self->cache->path_to_key($url));
   $cache->parent->mkpath;
-  my $req; $req = http_get $url,
+  my $timer = AnyEvent->timer( after => 61, cb => sub {
+    if ($self->has_lock($url)) {
+      $self->lock_respond($url, $self->cannotread);
+      undef $req;
+    }
+  });
+  $req = http_get $url,
     headers => $self->req_headers,
     on_header => sub {$self->check_headers(@_, $url)},
     timeout => 60,
     want_body_handle => 1,
     sub {
       my ($handle, $headers) = @_;
+      if ($headers->{Status} != 200) {
+        $self->lock_respond($url, $self->cannotread);
+        return;
+      }
       return unless $handle;
       my $fh = $cache->openw;
       $handle->on_read(sub {
@@ -140,6 +151,7 @@ sub download {
           $self->lock_respond($url, $self->toolarge);
           $cache->remove;
           $handle->destroy;
+          undef $timer;
           undef $handle;
           undef $req;
         }
@@ -150,11 +162,13 @@ sub download {
       $handle->on_error(sub{
         $self->lock_respond($url, $self->cannotread);
         $handle->destroy;
+        undef $timer;
         undef $handle;
         undef $req;
       });
       $handle->on_eof(sub {
         $handle->destroy;
+        undef $timer;
         undef $handle;
         undef $req;
         $fh = file($self->cache->path_to_key($url))->openr;
@@ -180,7 +194,7 @@ sub check_headers {
     $self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
-  if (!$type or $type !~ /^image/) {
+  if (!$type or $type !~ /^(?:image|application\/octet-stream)/) {
     $self->lock_respond($url, $self->badformat);
     $self->cache->set("$url-meta", {error => "badformat"});
     return 0;
@@ -199,6 +213,7 @@ sub build_url {
   my $base_path = $env->{SCRIPT_NAME} || '/';
   my $url = $base_path . ($env->{PATH_INFO} || '');
   $url =~ s{^/+}{};
+  return if !$url or $url eq "/";
   $url = "http://$url" unless $url =~ /^https?/;
   $url .= ($env->{QUERY_STRING} ? "?$env->{QUERY_STRING}" : "");
   $url =~ s/\s/%20/g;
