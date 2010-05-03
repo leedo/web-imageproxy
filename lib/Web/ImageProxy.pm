@@ -100,7 +100,7 @@ sub randomimage {
   if ($file and !$meta->{error}) {
     return [200, $meta->{headers}, $file->openr];
   }
-  return $self->randomimage(@keys); #avoid re-retrieving keys
+  return $self->randomimage(@keys);
 }
 
 sub call {
