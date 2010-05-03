@@ -205,12 +205,12 @@ sub check_headers {
   }
   if ($length and $length > $self->max_size) {
     $self->lock_respond($url, $self->toolarge);
-    $self->cache->set("$url-meta", {error => "toolarge"});
+    #$self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
   if (!$type or $type !~ /^(?:image|application\/octet-stream)/) {
     $self->lock_respond($url, $self->badformat);
-    $self->cache->set("$url-meta", {error => "badformat"});
+    #$self->cache->set("$url-meta", {error => "badformat"});
     return 0;
   }
   return 1;
