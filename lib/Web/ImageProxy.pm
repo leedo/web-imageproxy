@@ -86,11 +86,25 @@ sub to_app {
   };
 }
 
+sub randomimage {
+  my ($self, @keys) = @_;
+  if (!@keys) {
+    @keys = grep {$_ !~ /-meta$/} $self->cache->get_keys();
+  }
+  my $key = $keys[int(@keys * rand)];
+  my $file = file($self->cache->path_to_key($key));
+  my $meta = $self->cache->get("$key-meta");
+  if ($file and !$meta->{error}) {
+    return [200, $meta->{headers}, $file->openr];
+  }
+  return $self->randomimage(@keys);
+}
+
 sub call {
   my ($self, $env) = @_;
 
   my $url = build_url($env);
-  return $self->cannotread unless $url;
+  return $self->randomimage unless $url;
 
   if ($self->has_lock($url)) { # downloading
     return sub {
