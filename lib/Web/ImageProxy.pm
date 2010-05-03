@@ -100,7 +100,7 @@ sub randomimage {
   if ($file and !$meta->{error}) {
     return [200, $meta->{headers}, $file->openr];
   }
-  return $self->randomimage(@keys);
+  return $self->randomimage(@keys); #avoid re-retrieving keys
 }
 
 sub call {
@@ -145,6 +145,7 @@ sub download {
   $cache->parent->mkpath;
   my $timer = AnyEvent->timer( after => 61, cb => sub {
     if ($self->has_lock($url)) {
+      print STDERR "download timed out for $url\n";
       $self->lock_respond($url, $self->cannotread);
       undef $req;
     }
@@ -162,6 +163,7 @@ sub download {
         undef $req;
       };
       if ($headers->{Status} != 200) {
+        print STDERR "got $headers->{Status} for $url\n"
         $self->lock_respond($url, $self->cannotread);
         return;
       }
@@ -180,6 +182,7 @@ sub download {
         }
       });
       $handle->on_error(sub{
+        print STDERR "got an error downloading $url\n";
         $self->lock_respond($url, $self->cannotread);
         $cancel->();
       });
@@ -200,6 +203,7 @@ sub check_headers {
   my ($self, $headers, $url) = @_;
   my ($length, $type) = @$headers{'content-length', 'content-type'};
   if ($headers->{Status} != 200) {
+    print STDERR "got $headers->{Status} for $url\n";
     $self->lock_respond($url, $self->cannotread);
     return 0;
   }
