@@ -39,7 +39,10 @@ has req_headers => (
   is => 'ro',
   isa => 'HashRef',
   default => sub {
-    {"User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3"}
+    {
+      "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
+      "Referer" => undef,
+    }
   }
 );
 
