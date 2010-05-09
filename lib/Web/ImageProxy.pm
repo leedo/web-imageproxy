@@ -156,6 +156,11 @@ sub download {
     want_body_handle => 1,
     sub {
       my ($handle, $headers) = @_;
+      my $cancel = sub {
+        undef $timer;
+        undef $handle;
+        undef $req;
+      };
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url\n"
         $self->lock_respond($url, $self->cannotread);
@@ -169,10 +174,7 @@ sub download {
         if ($length > $self->max_size) {
           $self->lock_respond($url, $self->toolarge);
           $cache->remove;
-          $handle->destroy;
-          undef $timer;
-          undef $handle;
-          undef $req;
+          $cancel->();
         }
         else {
           print $fh $data;
@@ -181,16 +183,10 @@ sub download {
       $handle->on_error(sub{
         print STDERR "got an error downloading $url\n";
         $self->lock_respond($url, $self->cannotread);
-        $handle->destroy;
-        undef $timer;
-        undef $handle;
-        undef $req;
+        $cancel->();
       });
       $handle->on_eof(sub {
-        $handle->destroy;
-        undef $timer;
-        undef $handle;
-        undef $req;
+        $cancel->();
         $fh = file($self->cache->path_to_key($url))->openr;
         my $headers = [
           "Content-Type" => $headers->{'content-type'},
