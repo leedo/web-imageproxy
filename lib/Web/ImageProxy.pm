@@ -144,7 +144,6 @@ sub download {
   $cache->parent->mkpath;
   my $timer = AnyEvent->timer( after => 61, cb => sub {
     if ($self->has_lock($url)) {
-      print STDERR "download timed out for $url\n";
       $self->lock_respond($url, $self->cannotread);
       undef $req;
     }
@@ -162,7 +161,6 @@ sub download {
         undef $req;
       };
       if ($headers->{Status} != 200) {
-        print STDERR "got $headers->{Status} for $url\n"
         $self->lock_respond($url, $self->cannotread);
         return;
       }
@@ -181,7 +179,6 @@ sub download {
         }
       });
       $handle->on_error(sub{
-        print STDERR "got an error downloading $url\n";
         $self->lock_respond($url, $self->cannotread);
         $cancel->();
       });
@@ -202,7 +199,6 @@ sub check_headers {
   my ($self, $headers, $url) = @_;
   my ($length, $type) = @$headers{'content-length', 'content-type'};
   if ($headers->{Status} != 200) {
-    print STDERR "got $headers->{Status} for $url\n";
     $self->lock_respond($url, $self->cannotread);
     return 0;
   }
@@ -219,20 +215,13 @@ sub check_headers {
   return 1;
 }
 
-sub error {
-  my ($self, $error, $url) = @_;
-  $error = "error: $error";
-  $self->lock_respond($url, [404, ["Content-Type", "text/plain"], [$error]]);
-}
-
 sub build_url {
   my $env = shift;
   my $base_path = $env->{SCRIPT_NAME} || '/';
-  my $url = $base_path . ($env->{PATH_INFO} || '');
+  my $url = $base_path . ($env->{REQUEST_URI} || '');
   $url =~ s{^/+}{};
   return if !$url or $url eq "/";
   $url = "http://$url" unless $url =~ /^https?/;
-  $url .= ($env->{QUERY_STRING} ? "?$env->{QUERY_STRING}" : "");
   $url =~ s/\s/%20/g;
   return $url;
 }
