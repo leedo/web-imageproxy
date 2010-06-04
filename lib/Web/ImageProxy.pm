@@ -163,7 +163,7 @@ sub download {
         undef $req;
       };
       if ($headers->{Status} != 200) {
-        print STDERR "got $headers->{Status} for $url\n"
+        print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
         $self->lock_respond($url, $self->cannotread);
         return;
       }
@@ -182,7 +182,8 @@ sub download {
         }
       });
       $handle->on_error(sub{
-        print STDERR "got an error downloading $url\n";
+        my (undef, undef, $error) = @_;
+        print STDERR "got an error downloading $url: $error\n";
         $self->lock_respond($url, $self->cannotread);
         $cancel->();
       });
@@ -203,7 +204,7 @@ sub check_headers {
   my ($self, $headers, $url) = @_;
   my ($length, $type) = @$headers{'content-length', 'content-type'};
   if ($headers->{Status} != 200) {
-    print STDERR "got $headers->{Status} for $url\n";
+    print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
     $self->lock_respond($url, $self->cannotread);
     return 0;
   }
