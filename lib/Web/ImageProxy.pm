@@ -118,8 +118,9 @@ sub call {
 
   my $file = file($self->cache->path_to_key($url));
   my $meta = $self->cache->get("$url-meta");
+  my $uncache = $url =~ /\?.*uncache=1/;
 
-  if ($meta) { # info cached
+  if (!$uncache and $meta) { # info cached
     my $resp;
     if (my $error = $meta->{error}) {
       return $self->$error;
