@@ -213,7 +213,7 @@ sub check_headers {
     #$self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
-  if (!$type or $type !~ /^(?:image|application\/octet-stream)/) {
+  if (!$type or $type !~ /^(?:image|(?:application|binary)\/octet-stream)/) {
     $self->lock_respond($url, $self->badformat);
     #$self->cache->set("$url-meta", {error => "badformat"});
     return 0;
