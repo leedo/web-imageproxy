@@ -8,12 +8,20 @@ use Path::Class qw/dir file/;
 use URI::Escape;
 use AnyEvent::HTTP;
 use Any::Moose;
+use List::Util qw/shuffle/;
+use File::Spec::Functions qw/splitdir/;
+
+use constant MONTH => 2419200;
 
 has cache => (
   is => 'ro',
   lazy => 1,
   default => sub {
-    CHI->new(driver => "File", root_dir => $_[0]->cache_root);
+    CHI->new(
+      driver => "File",
+      root_dir => $_[0]->cache_root,
+      expires_in => MONTH,
+    );
   }
 );
 
@@ -26,7 +34,7 @@ has locks => (
 has cache_root => (
   is => 'ro',
   isa => 'Str',
-  default => sub {dir('./cache/images')->absolute->stringify}
+  default => sub {dir('./cache')->absolute->stringify}
 );
 
 has max_size => (
@@ -90,17 +98,45 @@ sub to_app {
 }
 
 sub randomimage {
-  my ($self, @keys) = @_;
-  if (!@keys) {
-    @keys = grep {$_ !~ /-meta$/} $self->cache->get_keys();
+  my ($self, $dir) = @_;
+
+  my $base = dir($dir || $self->cache->path_to_namespace);
+
+  my @children = shuffle $base->children;
+  my @files = grep {!$_->is_dir and $_ !~ /meta/} @children;
+
+  if (@files) {
+    my $root = $self->cache->path_to_namespace;
+    for my $file (@files) {
+
+      # strip off .dat
+      my $key = substr $file->basename, 0, -4;
+
+      # convert filename to url
+      $key =~ s/(https?)\+3a\+2f\+2f/$1\:\/\//;
+      $key =~ s/\+([0-9a-z])/%$1/g;
+      $key = uri_unescape($key);
+
+      my $meta = $self->cache->get("$key-meta");
+      if ($key and $meta and !$meta->{error}) {
+        return [200, $meta->{headers}, $file->openr];
+      }
+    }
   }
-  my $key = $keys[int(@keys * rand)];
-  my $file = file($self->cache->path_to_key($key));
-  my $meta = $self->cache->get("$key-meta");
-  if ($file and !$meta->{error}) {
-    return [200, $meta->{headers}, $file->openr];
+
+  # recurse into directories if there are no files
+  my @dirs = grep {$_->is_dir} @children;
+  for my $dir (@dirs) {
+    my $ret = $self->randomimage($dir);
+    return $ret if $ret;
   }
-  return $self->randomimage(@keys); #avoid re-retrieving keys
+
+  # return 404 if no images were found in any directory, shouldn't happen
+  if (!$dir) {
+    return [200, ['Content-Type', 'text/plain'], ['no images']];
+  }
+
+  return ();
 }
 
 sub call {
