@@ -103,30 +103,25 @@ sub randomimage {
   my $base = dir($dir || $self->cache->path_to_namespace);
 
   my @children = shuffle $base->children;
-  my @files = grep {!$_->is_dir and $_ !~ /meta/} @children;
+  my @files = grep {!$_->is_dir and $_ !~ /-meta\.dat$/} @children;
 
-  if (@files) {
-    my $root = $self->cache->path_to_namespace;
-    for my $file (@files) {
+  for my $file (@files) {
+    # convert filename to url
+    my $key = substr $file->basename, 0, -4;
+    $key =~ s/(https?)\+3a\+2f\+2f/$1\:\/\//;
+    $key =~ s/\+([0-9a-z]{2})/%$1/g;
+    $key = uri_unescape($key);
 
-      # strip off .dat
-      my $key = substr $file->basename, 0, -4;
+    my $meta = $self->cache->get("$key-meta");
 
-      # convert filename to url
-      $key =~ s/(https?)\+3a\+2f\+2f/$1\:\/\//;
-      $key =~ s/\+([0-9a-z])/%$1/g;
-      $key = uri_unescape($key);
-
-      my $meta = $self->cache->get("$key-meta");
-      if ($key and $meta and !$meta->{error}) {
-        return [200, $meta->{headers}, $file->openr];
-      }
+    if ($meta and !$meta->{error}) {
+      return [200, $meta->{headers}, $file->openr];
     }
   }
 
-  # recurse into directories if there are no files
   my @dirs = grep {$_->is_dir} @children;
 
+  # recurse into directories if there are no files
   for my $dir (@dirs) {
     my $ret = $self->randomimage($dir);
     return $ret if $ret;
