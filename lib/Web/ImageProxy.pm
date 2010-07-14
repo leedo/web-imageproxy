@@ -115,7 +115,8 @@ sub randomimage {
     my $meta = $self->cache->get("$key-meta");
 
     if ($meta and !$meta->{error}) {
-      return [200, $meta->{headers}, $file->openr];
+      return [200, ["Content-Type", "text/html"], ["<img src='http://i.usealice.org/$key' />"]];
+
     }
   }
 
