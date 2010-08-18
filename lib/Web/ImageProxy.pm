@@ -191,18 +191,22 @@ sub download {
     want_body_handle => 1,
     sub {
       my ($handle, $headers) = @_;
+
       my $cancel = sub {
         undef $timer;
         undef $handle;
         undef $req;
       };
+
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
         $self->lock_respond($url, $self->cannotread);
         return;
       }
+
       return unless $handle;
       my $fh = $cache->openw;
+
       $handle->on_read(sub {
         my $data = delete $_[0]->{rbuf};
         $length += length $data;
@@ -224,17 +228,20 @@ sub download {
           $self->lock_respond($url, $self->toolarge);
           $cache->remove;
           $cancel->();
+          return;
         }
         else {
           print $fh $data;
         }
       });
+
       $handle->on_error(sub{
         my (undef, undef, $error) = @_;
         print STDERR "got an error downloading $url: $error\n";
         $self->lock_respond($url, $self->cannotread);
         $cancel->();
       });
+
       $handle->on_eof(sub {
         $cancel->();
         $fh = file($self->cache->path_to_key($url))->openr;
@@ -251,16 +258,19 @@ sub download {
 sub check_headers {
   my ($self, $headers, $url) = @_;
   my ($length, $type) = @$headers{'content-length', 'content-type'};
+
   if ($headers->{Status} != 200) {
     print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
     $self->lock_respond($url, $self->cannotread);
     return 0;
   }
+
   if ($length and $length > $self->max_size) {
     $self->lock_respond($url, $self->toolarge);
     #$self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
+
   return 1;
 }
 
