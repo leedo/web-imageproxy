@@ -174,6 +174,7 @@ sub download {
   my ($self, $url) = @_;
   my $req;
   my $length = 0;
+  my $is_image = 0;
   my $cache = file($self->cache->path_to_key($url));
   $cache->parent->mkpath;
   my $timer = AnyEvent->timer( after => 61, cb => sub {
@@ -205,6 +206,20 @@ sub download {
       $handle->on_read(sub {
         my $data = delete $_[0]->{rbuf};
         $length += length $data;
+
+        if (!$is_image and $length > 1024) {
+          if (my $mime = $self->get_mime_type($data)) {
+            $is_image = 1;
+            $headers->{'content-type'} = $mime;
+          }
+          else {
+            $self->lock_respond($url, $self->badformat);
+            $cache->remove;
+            $cancel->();
+            return;
+          }
+        }
+
         if ($length > $self->max_size) {
           $self->lock_respond($url, $self->toolarge);
           $cache->remove;
@@ -246,13 +261,42 @@ sub check_headers {
     #$self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
-  if (!$type or $type !~ /^(?:image|(?:application|binary)\/octet-stream)/) {
-    $self->lock_respond($url, $self->badformat);
-    #$self->cache->set("$url-meta", {error => "badformat"});
-    return 0;
-  }
   return 1;
 }
+
+# taken from File::Type::WebImages
+sub get_mime_type {
+  my ($self, $data) = @_;
+  my $substr;
+
+  return undef unless defined $data;
+
+  if ($data =~ m[^\x89PNG]) {
+    return q{image/png};
+  } 
+  elsif ($data =~ m[^GIF8]) {
+    return q{image/gif};
+  }
+  elsif ($data =~ m[^BM]) {
+    return q{image/bmp};
+  }
+
+  if (length $data > 1) {
+    $substr = substr($data, 1, 1024);
+    if (defined $substr && $substr =~ m[^PNG]) {
+      return q{image/png};
+    }
+  }
+  if (length $data > 0) {
+    $substr = substr($data, 0, 2);
+    if (pack('H*', 'ffd8') eq $substr ) {
+      return q{image/jpeg};
+    }
+  }
+
+  return undef;
+}
+
 
 sub build_url {
   my $env = shift;
