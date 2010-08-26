@@ -115,7 +115,7 @@ sub randomimage {
     my $meta = $self->cache->get("$key-meta");
 
     if ($meta and !$meta->{error}) {
-      return [200, ["Content-Type", "text/html"], ["<img src='http://i.usealice.org/$key' />"]];
+      return [200, ["Content-Type", "text/html"], ["<img src='/$key' />"]];
 
     }
   }
@@ -245,18 +245,18 @@ sub download {
       $handle->on_eof(sub {
         $cancel->();
         $fh = file($self->cache->path_to_key($url))->openr;
-        my $headers = [
+        my @headers = (
           "Content-Type" => $headers->{'content-type'},
           "Content-Length" => $length
-        ];
+        );
 
         # add cache headers
-        push @$headers, map {$_ => $headers->{lc $_}}
-                       grep {$headers->{lc $_}}
-                          qw/Cache-Control Expires Last-Modified ETag/;
+        push @headers, map {$_ => $headers->{lc $_}}
+                      grep {$headers->{lc $_}}
+                         qw/Cache-Control Expires Last-Modified ETag/;
                           
-        $self->cache->set("$url-meta", {headers => $headers});
-        $self->lock_respond($url,[200, $headers, $fh]);
+        $self->cache->set("$url-meta", {headers => \@headers});
+        $self->lock_respond($url,[200, \@headers, $fh]);
       });
     }
 }
