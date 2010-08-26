@@ -249,6 +249,12 @@ sub download {
           "Content-Type" => $headers->{'content-type'},
           "Content-Length" => $length
         ];
+
+        # add cache headers
+        push @$headers, map {$_ => $headers->{lc $_}}
+                       grep {$headers->{lc $_}}
+                          qw/Cache-Control Expires Last-Modified ETag/;
+                          
         $self->cache->set("$url-meta", {headers => $headers});
         $self->lock_respond($url,[200, $headers, $fh]);
       });
