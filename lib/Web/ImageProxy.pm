@@ -162,10 +162,10 @@ sub call {
     }
     elsif ($meta->{headers} and -e $file->absolute->stringify) {
       if ($env->{"HTTP_IF_MODIFIED_SINCE"} and $env->{"HTTP_IF_MODIFIED_SINCE"} eq $meta->{modified}) {
-        return [304, ['Content-Type', 'text/plain'], ['not modified']];
+        return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
       elsif ($env->{"IF_NONE_MATCH"} and $env->{"IF_NONE_MATCH"} eq $meta->{etag}) {
-        return [304, ['Content-Type', 'text/plain'], ['not modified']];
+        return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
       return [200, $meta->{headers}, $file->openr];
     }
