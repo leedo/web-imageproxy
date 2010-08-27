@@ -10,6 +10,8 @@ use AnyEvent::HTTP;
 use Any::Moose;
 use List::Util qw/shuffle/;
 use File::Spec::Functions qw/splitdir/;
+use HTTP::Date;
+use Digest::SHA1 qw/sha1_hex/;
 
 use constant MONTH => 2419200;
 
@@ -159,6 +161,12 @@ sub call {
       return $self->$error;
     }
     elsif ($meta->{headers} and -e $file->absolute->stringify) {
+      if ($env->{"HTTP_IF_MODIFIED_SINCE"} and $env->{"HTTP_IF_MODIFIED_SINCE"} eq $meta->{modified}) {
+        return [304, ['Content-Type', 'text/plain'], ['not modified']];
+      }
+      elsif ($env->{"IF_NONE_MATCH"} and $env->{"IF_NONE_MATCH"} eq $meta->{etag}) {
+        return [304, ['Content-Type', 'text/plain'], ['not modified']];
+      }
       return [200, $meta->{headers}, $file->openr];
     }
   }
@@ -245,17 +253,23 @@ sub download {
       $handle->on_eof(sub {
         $cancel->();
         $fh = file($self->cache->path_to_key($url))->openr;
+
+        my $modified = $headers->{last_modified} || time2str(time);
+        my $etag = $headers->{etag} || sha1_hex($url);
+
         my @headers = (
           "Content-Type" => $headers->{'content-type'},
-          "Content-Length" => $length
+          "Content-Length" => $length,
+          "Cache-Control" => "public, max-age=86400",
+          "Last-Modified" => $modified,
+          "ETag" => $etag,
         );
 
-        # add cache headers
-        push @headers, map {$_ => $headers->{lc $_}}
-                      grep {$headers->{lc $_}}
-                         qw/Cache-Control Expires Last-Modified ETag/;
-                          
-        $self->cache->set("$url-meta", {headers => \@headers});
+        $self->cache->set("$url-meta", {
+          headers => \@headers,
+          etag => $etag,
+          modified => $modified,
+        });
         $self->lock_respond($url,[200, \@headers, $fh]);
       });
     }
