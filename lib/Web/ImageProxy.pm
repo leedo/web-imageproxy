@@ -141,6 +141,9 @@ sub randomimage {
 sub call {
   my ($self, $env) = @_;
 
+  return [404, ['Content-Type', 'text/html'], ['not found']]
+    if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
+
   my $url = build_url($env);
   return $self->randomimage unless $url;
 
@@ -180,11 +183,12 @@ sub call {
 
 sub download {
   my ($self, $url) = @_;
+
   my $req;
-  my $length = 0;
-  my $is_image = 0;
   my $cache = file($self->cache->path_to_key($url));
   $cache->parent->mkpath;
+  my $fh = $cache->openw;
+
   my $timer = AnyEvent->timer( after => 61, cb => sub {
     if ($self->has_lock($url)) {
       print STDERR "download timed out for $url\n";
@@ -192,6 +196,7 @@ sub download {
       undef $req;
     }
   });
+
   $req = http_get $url,
     headers => $self->req_headers,
     on_header => sub {$self->check_headers(@_, $url)},
@@ -204,6 +209,7 @@ sub download {
         undef $timer;
         undef $handle;
         undef $req;
+        close $fh;
       };
 
       if ($headers->{Status} != 200) {
@@ -213,23 +219,39 @@ sub download {
       }
 
       return unless $handle;
-      my $fh = $cache->openw;
+
+      my $length = 0;
+      my $is_image = 0;
+      my $image_header;
 
       $handle->on_read(sub {
         my $data = delete $_[0]->{rbuf};
         $length += length $data;
 
-        if (!$is_image and $length > 1024) {
-          if (my $mime = $self->get_mime_type($data)) {
-            $is_image = 1;
-            $headers->{'content-type'} = $mime;
+        # we haven't determined the image type yet
+        if (!$is_image) {
+
+          $image_header .= $data;
+
+          # enough data to determine mime type
+          if ($length > 1024) {
+
+            # got the image type, yay
+            if (my $mime = $self->get_mime_type($image_header)) {
+              $is_image = 1;
+              $headers->{'content-type'} = $mime;
+              print $fh $image_header;
+            }
+
+            # not a valid image
+            else {
+              $self->lock_respond($url, $self->badformat);
+              $cache->remove;
+              $cancel->();
+            }
           }
-          else {
-            $self->lock_respond($url, $self->badformat);
-            $cache->remove;
-            $cancel->();
-            return;
-          }
+
+          return;
         }
 
         if ($length > $self->max_size) {
@@ -245,7 +267,6 @@ sub download {
 
       $handle->on_error(sub{
         my (undef, undef, $error) = @_;
-        print STDERR "got an error downloading $url: $error\n";
         $self->lock_respond($url, $self->cannotread);
         $cancel->();
       });
