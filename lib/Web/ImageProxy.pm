@@ -272,7 +272,22 @@ sub download {
       });
 
       $handle->on_eof(sub {
+        # the file is under 1K so nothing has been written
+        if (!$is_image) {
+          if (my $mime = $self->get_mime_type($image_header)) {
+            $headers->{'content-type'} = $mime;
+            print $fh $image_header;
+          }
+          else {
+            $self->lock_respond($url, $self->badformat);
+            $cache->remove;
+            $cancel->();
+            return;
+          }
+        }
+
         $cancel->();
+
         $fh = file($self->cache->path_to_key($url))->openr;
 
         my $modified = $headers->{last_modified} || time2str(time);
