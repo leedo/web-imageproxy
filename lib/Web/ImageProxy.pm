@@ -19,9 +19,11 @@ has cache => (
   is => 'ro',
   lazy => 1,
   default => sub {
+    my $r = $_[0]->cache_root;
+    mkdir $r unless -e $r;
     CHI->new(
       driver => "File",
-      root_dir => $_[0]->cache_root,
+      root_dir => $r,
       expires_in => MONTH,
     );
   }
@@ -103,6 +105,14 @@ sub randomimage {
   my ($self, $env, $dir) = @_;
 
   my $base = dir($dir || $self->cache->path_to_namespace);
+
+  if (!-e $base) {
+    return [
+      200,
+      ["Content-Type", "text/plain"],
+      ["no images"]
+    ]
+  }
 
   my @children = shuffle $base->children;
   my @files = grep {!$_->is_dir and $_ !~ /-meta\.dat$/} @children;
