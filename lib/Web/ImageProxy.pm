@@ -100,7 +100,7 @@ sub to_app {
 }
 
 sub randomimage {
-  my ($self, $dir) = @_;
+  my ($self, $env, $dir) = @_;
 
   my $base = dir($dir || $self->cache->path_to_namespace);
 
@@ -117,7 +117,7 @@ sub randomimage {
     my $meta = $self->cache->get("$key-meta");
 
     if ($meta and !$meta->{error}) {
-      return [200, ["Content-Type", "text/html"], ["<img src='/$key' />"]];
+      return [200, ["Content-Type", "text/html"], ["<img src='$env->{SCRIPT_NAME}/$key' />"]];
 
     }
   }
@@ -126,7 +126,7 @@ sub randomimage {
 
   # recurse into directories if there are no files
   for my $dir (@dirs) {
-    my $ret = $self->randomimage($dir);
+    my $ret = $self->randomimage($env, $dir);
     return $ret if $ret;
   }
 
@@ -145,7 +145,7 @@ sub call {
     if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
 
   my $url = build_url($env);
-  return $self->randomimage unless $url;
+  return $self->randomimage($env) unless $url;
 
   if ($self->has_lock($url)) { # downloading
     return sub {
@@ -366,8 +366,8 @@ sub get_mime_type {
 
 sub build_url {
   my $env = shift;
-  my $base_path = $env->{SCRIPT_NAME} || '/';
-  my $url = $base_path . ($env->{REQUEST_URI} || '');
+  my $base_path = $env->{SCRIPT_NAME};
+  my $url = substr($env->{REQUEST_URI}, length $base_path);
   $url =~ s{^/+}{};
   return if !$url or $url eq "/";
   $url = "http://$url" unless $url =~ /^https?/;

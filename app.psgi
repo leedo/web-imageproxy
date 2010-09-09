@@ -7,5 +7,5 @@ my $app = Web::ImageProxy->new(
 );
 
 builder {
-  mount '/' => $app->to_app;
+  mount '/i' => $app->to_app;
 }
