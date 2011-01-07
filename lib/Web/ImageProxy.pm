@@ -12,9 +12,6 @@ use List::Util qw/shuffle/;
 use File::Spec::Functions qw/splitdir/;
 use HTTP::Date;
 use Digest::SHA1 qw/sha1_hex/;
-use Plack::Request;
-use File::Find;
-use JSON;
 
 use constant MONTH => 2419200;
 
@@ -104,16 +101,6 @@ sub to_app {
   };
 }
 
-sub file_to_url {
-  my $file = shift;
-  # convert filename to url
-  my $key = substr $file->basename, 0, -4;
-  $key =~ s/(https?)\+3a\+2f\+2f/$1\:\/\//;
-  $key =~ s/\+([0-9a-z]{2})/%$1/g;
-  $key = uri_unescape($key);
-  return $key
-}
-
 sub randomimage {
   my ($self, $env, $dir) = @_;
 
@@ -131,7 +118,12 @@ sub randomimage {
   my @files = grep {!$_->is_dir and $_ !~ /-meta\.dat$/} @children;
 
   for my $file (@files) {
-    my $key = file_to_url($file);
+    # convert filename to url
+    my $key = substr $file->basename, 0, -4;
+    $key =~ s/(https?)\+3a\+2f\+2f/$1\:\/\//;
+    $key =~ s/\+([0-9a-z]{2})/%$1/g;
+    $key = uri_unescape($key);
+
     my $meta = $self->cache->get("$key-meta");
 
     if ($meta and !$meta->{error}) {
@@ -161,10 +153,6 @@ sub call {
 
   return [404, ['Content-Type', 'text/html'], ['not found']]
     if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
-
-  if ($env->{PATH_INFO} eq "/images.json") {
-    return $self->json_image_list($env);
-  }
 
   my $url = build_url($env);
   return $self->randomimage($env) unless $url;
@@ -201,34 +189,6 @@ sub call {
     $self->add_lock_callback($url, $cb); 
     $self->download($url);
   };
-}
-
-sub json_image_list {
-  my ($self, $env) = @_;
-
-  my $req = Plack::Request->new($env);
-  my $since = $req->parameters->{since};
-  my $base = $self->cache->path_to_namespace;
-  my @images;
-
-  find({no_chdir => 1, wanted => sub {
-    my $file = file($_);
-    return unless -f $file and  $file !~ /-meta\.dat$/;
-
-    my $mtime = $file->stat->mtime;
-    next if defined $since and $since < $mtime;
-
-    my $key = file_to_url($file);
-    my $meta = $self->cache->get("$key-meta");
-    my %headers = @{ $meta->{headers} };
-
-    push @images, [$key, {
-      "Content-Type" => $headers{"Content-Type"},
-      created => $mtime,
-    }];
-  }}, $self->cache->path_to_namespace);
-  
-  return [200, ['Content-Type', 'text/json'], [encode_json \@images]];
 }
 
 sub download {
