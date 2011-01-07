@@ -251,6 +251,7 @@ sub download {
     headers => $self->req_headers,
     on_header => sub {$self->check_headers(@_, $url)},
     timeout => 60,
+    keepalive => 0,
     want_body_handle => 1,
     sub {
       my ($handle, $headers) = @_;
