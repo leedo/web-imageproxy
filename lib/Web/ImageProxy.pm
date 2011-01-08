@@ -194,131 +194,90 @@ sub call {
 sub download {
   my ($self, $url) = @_;
 
-  my $req;
   my $cache = file($self->cache->path_to_key($url));
   $cache->parent->mkpath;
   my $fh = $cache->openw;
 
-  my $timer = AnyEvent->timer( after => 61, cb => sub {
-    if ($self->has_lock($url)) {
-      print STDERR "download timed out for $url\n";
-      $self->lock_respond($url, $self->cannotread);
-      undef $req;
-    }
-  });
+  my $length = 0;
+  my $is_image = 0;
+  my $image_header;
 
-  $req = http_get $url,
+  http_get $url,
     headers => $self->req_headers,
     on_header => sub {$self->check_headers(@_, $url)},
     timeout => 60,
-    keepalive => 0,
-    want_body_handle => 1,
+    on_body => sub {
+      my ($data, $headers) = @_;
+      $length += length $data;
+
+      if (!$is_image) {
+        $image_header .= $data;
+
+        if ($length > 1024) {
+          if (my $mime = $self->get_mime_type($image_header)) {
+            $is_image = 1;
+            $headers->{'content-type'} = $mime;
+            print $fh $image_header;
+            $image_header = '';
+          }
+          else {
+            $self->lock_respond($url, $self->badformat);
+            $cache->remove;
+            return 0;
+          }
+        }
+        return 1;
+      }
+
+      if ($length > $self->max_size) {
+        $self->lock_respond($url, $self->toolarge);
+        $cache->remove;
+        return 0;
+      }
+
+      print $fh $data;
+      return 1
+    },
     sub {
-      my ($handle, $headers) = @_;
-
-      my $cancel = sub {
-        undef $timer;
-        undef $handle;
-        undef $req;
-        close $fh;
-      };
-
+      my (undef, $headers) = @_;
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
         $self->lock_respond($url, $self->cannotread);
         return;
       }
 
-      return unless $handle;
-
-      my $length = 0;
-      my $is_image = 0;
-      my $image_header;
-
-      $handle->on_read(sub {
-        my $data = delete $_[0]->{rbuf};
-        $length += length $data;
-
-        # we haven't determined the image type yet
-        if (!$is_image) {
-
-          $image_header .= $data;
-
-          # enough data to determine mime type
-          if ($length > 1024) {
-
-            # got the image type, yay
-            if (my $mime = $self->get_mime_type($image_header)) {
-              $is_image = 1;
-              $headers->{'content-type'} = $mime;
-              print $fh $image_header;
-            }
-
-            # not a valid image
-            else {
-              $self->lock_respond($url, $self->badformat);
-              $cache->remove;
-              $cancel->();
-            }
-          }
-
-          return;
-        }
-
-        if ($length > $self->max_size) {
-          $self->lock_respond($url, $self->toolarge);
-          $cache->remove;
-          $cancel->();
-          return;
+      # the file is under 1K so nothing has been written
+      if (!$is_image) {
+        if (my $mime = $self->get_mime_type($image_header)) {
+          $headers->{'content-type'} = $mime;
+          print $fh $image_header;
         }
         else {
-          print $fh $data;
+          $self->lock_respond($url, $self->badformat);
+          $cache->remove;
+          return;
         }
+      }
+
+      $fh = file($self->cache->path_to_key($url))->openr;
+
+      my $modified = $headers->{last_modified} || time2str(time);
+      my $etag = $headers->{etag} || sha1_hex($url);
+
+      my @headers = (
+        "Content-Type" => $headers->{'content-type'},
+        "Content-Length" => $length,
+        "Cache-Control" => "public, max-age=86400",
+        "Last-Modified" => $modified,
+        "ETag" => $etag,
+      );
+
+      $self->cache->set("$url-meta", {
+        headers => \@headers,
+        etag => $etag,
+        modified => $modified,
       });
-
-      $handle->on_error(sub{
-        my (undef, undef, $error) = @_;
-        $self->lock_respond($url, $self->cannotread);
-        $cancel->();
-      });
-
-      $handle->on_eof(sub {
-        # the file is under 1K so nothing has been written
-        if (!$is_image) {
-          if (my $mime = $self->get_mime_type($image_header)) {
-            $headers->{'content-type'} = $mime;
-            print $fh $image_header;
-          }
-          else {
-            $self->lock_respond($url, $self->badformat);
-            $cache->remove;
-            $cancel->();
-            return;
-          }
-        }
-
-        $cancel->();
-
-        $fh = file($self->cache->path_to_key($url))->openr;
-
-        my $modified = $headers->{last_modified} || time2str(time);
-        my $etag = $headers->{etag} || sha1_hex($url);
-
-        my @headers = (
-          "Content-Type" => $headers->{'content-type'},
-          "Content-Length" => $length,
-          "Cache-Control" => "public, max-age=86400",
-          "Last-Modified" => $modified,
-          "ETag" => $etag,
-        );
-
-        $self->cache->set("$url-meta", {
-          headers => \@headers,
-          etag => $etag,
-          modified => $modified,
-        });
-        $self->lock_respond($url,[200, \@headers, $fh]);
-      });
+      $self->lock_respond($url,[200, \@headers, $fh]);
     }
 }
 
@@ -377,8 +336,7 @@ sub get_mime_type {
 
 sub build_url {
   my $env = shift;
-  my $base_path = $env->{SCRIPT_NAME};
-  my $url = substr($env->{REQUEST_URI}, length $base_path);
+  my $url = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
   $url =~ s{^/+}{};
   return if !$url or $url eq "/";
   $url = "http://$url" unless $url =~ /^https?/;
