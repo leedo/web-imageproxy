@@ -208,6 +208,9 @@ sub download {
     timeout => 60,
     on_body => sub {
       my ($data, $headers) = @_;
+      
+      return 1 unless $headers->{Status} == 200;
+
       $length += length $data;
 
       if (!$is_image) {
