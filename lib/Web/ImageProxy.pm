@@ -67,7 +67,7 @@ sub asset_res {
 
   my $file = file("static/image/$name.gif");
   my $fh = $file->openr;
-  Plack::Util::set_io_path($fh, $file->absolute->stringify);
+  Plack::Util::set_io_path($fh, "$file");
 
   if ($file) {
     return [
@@ -129,7 +129,7 @@ sub handle_url {
     };
   }
 
-  my $file = $self->cache->path_to_key($url);
+  my $file = file($self->cache->path_to_key($url));
   my $meta = $self->cache->get("$url-meta");
   my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
@@ -146,8 +146,8 @@ sub handle_url {
         return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
 
-      open my $fh, '<', $file;
-      Plack::Util::set_io_path($fh, $file);
+      my $fh = $file->openr;
+      Plack::Util::set_io_path($fh, "$file");
       
       return [200, $meta->{headers}, $fh];
     }
@@ -234,8 +234,10 @@ sub download {
         }
       }
 
-      my $fh = $cache->openr;
-      Plack::Util::set_io_path($fh, $cache->absolute->stringify);
+      close $fh;
+
+      $fh = $cache->openr;
+      Plack::Util::set_io_path($fh, "$cache");
 
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
