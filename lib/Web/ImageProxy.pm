@@ -64,9 +64,10 @@ sub call {
 
 sub asset_res {
   my ($self, $name) = @_;
+
   my $file = file("static/image/$name.gif");
   my $fh = $file->openr;
-  Plack::Util::set_io_path($fh);
+  Plack::Util::set_io_path($fh, $file->absolute->stringify);
 
   if ($file) {
     return [
@@ -98,7 +99,7 @@ sub redirect {
 sub valid_referer {
   my ($self, $env) = @_;
   my $referer = $env->{HTTP_REFERER};
-  return 1 unless $referer or !@{$self->allowed_referers};
+  return 1 unless $referer and @{$self->allowed_referers};
   return any {$referer =~ $_} @{$self->allowed_referers};
 }
 
@@ -128,7 +129,7 @@ sub handle_url {
     };
   }
 
-  my $file = file($self->cache->path_to_key($url));
+  my $file = $self->cache->path_to_key($url);
   my $meta = $self->cache->get("$url-meta");
   my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
@@ -139,14 +140,14 @@ sub handle_url {
       return $self->$error;
     }
 
-    elsif ($meta->{headers} and -e $file->absolute->stringify) {
+    elsif ($meta->{headers} and -e $file) {
       
       if ($self->is_unchanged($meta, $env)) {
         return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
 
-      my $fh = $file->openr;
-      Plack::Util::set_io_path($fh);
+      open my $fh, '<', $file;
+      Plack::Util::set_io_path($fh, $file);
       
       return [200, $meta->{headers}, $fh];
     }
@@ -233,7 +234,8 @@ sub download {
         }
       }
 
-      $fh = file($self->cache->path_to_key($url))->openr;
+      my $fh = $cache->openr;
+      Plack::Util::set_io_path($fh, $cache->absolute->stringify);
 
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
@@ -252,7 +254,6 @@ sub download {
         modified => $modified,
       });
 
-      Plack::Util::set_io_path($fh);
       $self->lock_respond($url,[200, \@headers, $fh]);
     }
 }
