@@ -8,9 +8,9 @@ use Path::Class qw/dir file/;
 use URI::Escape;
 use AnyEvent::HTTP;
 use Any::Moose;
-use List::Util qw/shuffle/;
-use File::Spec::Functions qw/splitdir/;
 use HTTP::Date;
+use List::Util qw/shuffle/;
+use List::MoreUtils qw/any/;
 use Digest::SHA1 qw/sha1_hex/;
 
 use constant MONTH => 2419200;
@@ -44,7 +44,7 @@ has cache_root => (
 has max_size => (
   is => 'ro',
   isa => 'Int',
-  default => 2097152,
+  default => sub { 2097152 * 2 },
 );
 
 has req_headers => (
@@ -58,41 +58,41 @@ has req_headers => (
   }
 );
 
-has toolarge => (
-  is => 'ro',
-  default => sub {
-    my $file = file("static/image/TooLarge.gif");
-    [
-      200,
-      ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
-      $file->openr
-    ];
-  }
+has allowed_referers => (
+  is => 'rw',
+  isa => 'ArrayRef',
+  default => sub {[]},
 );
 
-has badformat => (
-  is => 'ro',
-  default => sub {
-    my $file = file('static/image/BadFormat.gif');
-    [
+sub asset_res {
+  my ($self, $name) = @_;
+  my $file = file("static/image/$name.gif");
+  if ($file) {
+    return [
       200,
       ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
       $file->openr
     ];
   }
-);
+}
 
-has cannotread => (
-  is => 'ro',
-  default => sub {
-    my $file = file('static/image/CannotRead.gif');
-    [
-      200,
-      ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
-      $file->openr
-    ];
-  }
-);
+sub not_found {
+  my $self = shift;
+  return [
+    404,
+    ['Content-Type', 'text/plain'],
+    ['not found']
+  ];
+}
+
+sub redirect {
+  my ($self, $url) = @_;
+  return [
+    301,
+    [Location => $url],
+    ['go away'],
+  ];
+}
 
 sub to_app {
   my $self = shift;
@@ -101,61 +101,27 @@ sub to_app {
   };
 }
 
-sub randomimage {
-  my ($self, $env, $dir) = @_;
-
-  my $base = dir($dir || $self->cache->path_to_namespace);
-
-  if (!-e $base) {
-    return [
-      200,
-      ["Content-Type", "text/plain"],
-      ["no images"]
-    ]
-  }
-
-  my @children = shuffle $base->children;
-  my @files = grep {!$_->is_dir and $_ !~ /-meta\.dat$/} @children;
-
-  for my $file (@files) {
-    # convert filename to url
-    my $key = substr $file->basename, 0, -4;
-    $key =~ s/(https?)\+3a\+2f\+2f/$1\:\/\//;
-    $key =~ s/\+([0-9a-z]{2})/%$1/g;
-    $key = uri_unescape($key);
-
-    my $meta = $self->cache->get("$key-meta");
-
-    if ($meta and !$meta->{error}) {
-      return [200, ["Content-Type", "text/html"], ["<img src='$env->{SCRIPT_NAME}/$key' />"]];
-
-    }
-  }
-
-  my @dirs = grep {$_->is_dir} @children;
-
-  # recurse into directories if there are no files
-  for my $dir (@dirs) {
-    my $ret = $self->randomimage($env, $dir);
-    return $ret if $ret;
-  }
-
-  # return 404 if no images were found in any directory, shouldn't happen
-  if (!$dir) {
-    return [200, ['Content-Type', 'text/plain'], ['no images']];
-  }
-
-  return ();
+sub valid_referer {
+  my ($self, $env) = @_;
+  my $referer = $env->{HTTP_REFERER};
+  return 1 unless $referer or !@{$self->allowed_referers};
+  return any {$referer =~ $_} @{$self->allowed_referers};
 }
 
 sub call {
   my ($self, $env) = @_;
 
-  return [404, ['Content-Type', 'text/html'], ['not found']]
-    if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
+  return $self->not_found if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
 
   my $url = build_url($env);
-  return $self->randomimage($env) unless $url;
+
+  return $self->not_found unless $url;
+  return $self->redirect($url) unless $self->valid_referer($env);
+  return $self->handle_url($url, $env);
+}
+
+sub handle_url {
+  my ($self, $url, $env) = @_;
 
   if ($self->has_lock($url)) { # downloading
     return sub {
@@ -166,7 +132,7 @@ sub call {
 
   my $file = file($self->cache->path_to_key($url));
   my $meta = $self->cache->get("$url-meta");
-  my $uncache = $url =~ /\?.*uncache=1/;
+  my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
   if (!$uncache and $meta) { # info cached
     my $resp;
@@ -189,6 +155,7 @@ sub call {
     $self->add_lock_callback($url, $cb); 
     $self->download($url);
   };
+
 }
 
 sub download {
@@ -208,7 +175,7 @@ sub download {
     timeout => 60,
     on_body => sub {
       my ($data, $headers) = @_;
-      
+
       return 1 unless $headers->{Status} == 200;
 
       $length += length $data;
@@ -224,7 +191,7 @@ sub download {
             $image_header = '';
           }
           else {
-            $self->lock_respond($url, $self->badformat);
+            $self->lock_respond($url, $self->asset_res("badformat"));
             $cache->remove;
             return 0;
           }
@@ -233,7 +200,7 @@ sub download {
       }
 
       if ($length > $self->max_size) {
-        $self->lock_respond($url, $self->toolarge);
+        $self->lock_respond($url, $self->asset_res("toolarge"));
         $cache->remove;
         return 0;
       }
@@ -245,7 +212,7 @@ sub download {
       my (undef, $headers) = @_;
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
-        $self->lock_respond($url, $self->cannotread);
+        $self->lock_respond($url, $self->asset_res("cannotread"));
         return;
       }
 
@@ -256,7 +223,7 @@ sub download {
           print $fh $image_header;
         }
         else {
-          $self->lock_respond($url, $self->badformat);
+          $self->lock_respond($url, $self->asset_res("badformat"));
           $cache->remove;
           return;
         }
@@ -290,13 +257,13 @@ sub check_headers {
 
   if ($headers->{Status} != 200) {
     print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
-    $self->lock_respond($url, $self->cannotread);
+    $self->lock_respond($url, $self->asset_res("cannotread"));
     return 0;
   }
 
   if ($length and $length > $self->max_size) {
-    $self->lock_respond($url, $self->toolarge);
-    #$self->cache->set("$url-meta", {error => "toolarge"});
+    $self->lock_respond($url, $self->asset_res("toolarge"));
+    $self->cache->set("$url-meta", {error => "toolarge"});
     return 0;
   }
 
@@ -341,8 +308,10 @@ sub build_url {
   my $env = shift;
   my $url = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
   $url =~ s{^/+}{};
+  $url =~ s/&amp;/&/g;
   return if !$url or $url eq "/";
-  $url = "http://$url" unless $url =~ /^https?/;
+  $url =~ s{^(https?:/)([^/])}{$1/$2}i;
+  $url = "http://$url" unless $url =~ /^https?/i;
   $url =~ s/\s/%20/g;
   return $url;
 }
