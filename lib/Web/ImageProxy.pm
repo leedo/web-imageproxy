@@ -7,62 +7,59 @@ use CHI;
 use Path::Class qw/dir file/;
 use URI::Escape;
 use AnyEvent::HTTP;
-use Any::Moose;
 use HTTP::Date;
 use List::Util qw/shuffle/;
 use List::MoreUtils qw/any/;
 use Digest::SHA1 qw/sha1_hex/;
 
-use constant MONTH => 2419200;
+use Plack::Util::Accessor qw/cache cache_root max_size allowed_referers/;
 
-has cache => (
-  is => 'ro',
-  lazy => 1,
-  default => sub {
-    my $r = $_[0]->cache_root;
-    mkdir $r unless -e $r;
-    CHI->new(
-      driver => "File",
-      root_dir => $r,
-      expires_in => MONTH,
-    );
+use parent 'Plack::Component';
+
+our $REQ_HEADERS = {
+  "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
+  "Referer" => undef,
+};
+
+sub prepare_app {
+  my $self = shift;
+
+  $self->{max_size} = 2097152 * 2     unless defined $self->{max_size};
+  $self->{allowed_referers} = []      unless defined $self->{allowed_referers};
+
+  unless (defined $self->{cache}) {
+    $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
+    $self->{cache} = $self->build_cache;
   }
-);
 
-has locks => (
-  is => 'ro',
-  isa => 'HashRef',
-  default => sub {{}},
-);
+  $self->{locks} = {};
+}
 
-has cache_root => (
-  is => 'ro',
-  isa => 'Str',
-  default => sub {dir('./cache')->absolute->stringify}
-);
+sub build_cache {
+  my $self = shift;
 
-has max_size => (
-  is => 'ro',
-  isa => 'Int',
-  default => sub { 2097152 * 2 },
-);
+  my $r = dir($self->cache_root);
+  $r->mkpath unless -e $r;
 
-has req_headers => (
-  is => 'ro',
-  isa => 'HashRef',
-  default => sub {
-    {
-      "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
-      "Referer" => undef,
-    }
-  }
-);
+  return CHI->new(
+    driver => "File",
+    root_dir => $r,
+    expires_in => 2419200, # one month
+  );
+}
 
-has allowed_referers => (
-  is => 'rw',
-  isa => 'ArrayRef',
-  default => sub {[]},
-);
+sub call {
+  my ($self, $env) = @_;
+
+  return $self->not_found      if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
+
+  my $url = build_url($env);
+
+  return $self->not_found      unless $url;
+  return $self->redirect($url) unless $self->valid_referer($env);
+
+  return $self->handle_url($url, $env);
+}
 
 sub asset_res {
   my ($self, $name) = @_;
@@ -94,13 +91,6 @@ sub redirect {
   ];
 }
 
-sub to_app {
-  my $self = shift;
-  return sub {
-    $self->call(@_);
-  };
-}
-
 sub valid_referer {
   my ($self, $env) = @_;
   my $referer = $env->{HTTP_REFERER};
@@ -108,16 +98,20 @@ sub valid_referer {
   return any {$referer =~ $_} @{$self->allowed_referers};
 }
 
-sub call {
-  my ($self, $env) = @_;
+sub is_unchanged {
+  my ($self, $meta, $env) = @_;
 
-  return $self->not_found if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
+  my $modified = $env->{"HTTP_IF_MODIFIED_SINCE"};
+  my $etag = $env->{"IF_NONE_MATCH"};
 
-  my $url = build_url($env);
+  if ($modified) {
+    return $modified eq $meta->{modified}
+  }
+  elsif ($etag) {
+    return $etag eq $meta->{etag};
+  }
 
-  return $self->not_found unless $url;
-  return $self->redirect($url) unless $self->valid_referer($env);
-  return $self->handle_url($url, $env);
+  return 0;
 }
 
 sub handle_url {
@@ -136,16 +130,17 @@ sub handle_url {
 
   if (!$uncache and $meta) { # info cached
     my $resp;
+
     if (my $error = $meta->{error}) {
       return $self->$error;
     }
+
     elsif ($meta->{headers} and -e $file->absolute->stringify) {
-      if ($env->{"HTTP_IF_MODIFIED_SINCE"} and $env->{"HTTP_IF_MODIFIED_SINCE"} eq $meta->{modified}) {
+      
+      if ($self->is_unchanged($meta, $env)) {
         return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
-      elsif ($env->{"IF_NONE_MATCH"} and $env->{"IF_NONE_MATCH"} eq $meta->{etag}) {
-        return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
-      }
+
       return [200, $meta->{headers}, $file->openr];
     }
   }
@@ -170,7 +165,7 @@ sub download {
   my $image_header;
 
   http_get $url,
-    headers => $self->req_headers,
+    headers => $REQ_HEADERS,
     on_header => sub {$self->check_headers(@_, $url)},
     timeout => 60,
     on_body => sub {
@@ -208,8 +203,10 @@ sub download {
       print $fh $data;
       return 1
     },
+
     sub {
       my (undef, $headers) = @_;
+
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
         $self->lock_respond($url, $self->asset_res("cannotread"));
@@ -247,6 +244,7 @@ sub download {
         etag => $etag,
         modified => $modified,
       });
+
       $self->lock_respond($url,[200, \@headers, $fh]);
     }
 }
