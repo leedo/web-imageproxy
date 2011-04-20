@@ -1,4 +1,3 @@
-use Plack::Builder;
 use lib 'lib';
 use Web::ImageProxy;
 

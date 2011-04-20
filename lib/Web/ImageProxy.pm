@@ -43,7 +43,7 @@ sub build_cache {
 
   return CHI->new(
     driver => "File",
-    root_dir => $r,
+    root_dir => "$r",
     expires_in => 2419200, # one month
   );
 }
