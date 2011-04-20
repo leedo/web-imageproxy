@@ -65,11 +65,14 @@ sub call {
 sub asset_res {
   my ($self, $name) = @_;
   my $file = file("static/image/$name.gif");
+  my $fh = $file->openr;
+  Plack::Util::set_io_path($fh);
+
   if ($file) {
     return [
       200,
       ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
-      Plack::Util::set_io_path($file->openr),
+      $fh,
     ];
   }
 }
@@ -142,7 +145,10 @@ sub handle_url {
         return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
 
-      return [200, $meta->{headers}, Plack::Util::set_io_path($file->openr)];
+      my $fh = $file->openr;
+      Plack::Util::set_io_path($fh);
+      
+      return [200, $meta->{headers}, $fh];
     }
   }
 
@@ -246,7 +252,8 @@ sub download {
         modified => $modified,
       });
 
-      $self->lock_respond($url,[200, \@headers, Plack::Util::set_io_path($fh)]);
+      Plack::Util::set_io_path($fh);
+      $self->lock_respond($url,[200, \@headers, $fh]);
     }
 }
 
@@ -319,7 +326,7 @@ sub lock_respond {
   my ($self, $url, $res) = @_;
   if ($self->has_lock($url)) {
     for my $lock_cb ($self->get_lock_callbacks($url)) {
-      $lock_cb->( $res);
+      $lock_cb->($res);
     }
     $self->remove_lock($url);
   }
@@ -327,27 +334,27 @@ sub lock_respond {
 
 sub has_lock {
   my ($self, $url) = @_;
-  exists $self->locks->{$url};
+  exists $self->{locks}->{$url};
 }
 
 sub get_lock_callbacks {
   my ($self, $url) = @_;
-  @{$self->locks->{$url}};
+  @{$self->{locks}->{$url}};
 }
 
 sub add_lock_callback {
   my ($self, $url, $cb) = @_;
   if ($self->has_lock($url)) {
-    push @{$self->locks->{$url}}, $cb;
+    push @{$self->{locks}->{$url}}, $cb;
   }
   else {
-    $self->locks->{$url} = [$cb];
+    $self->{locks}->{$url} = [$cb];
   }
 }
 
 sub remove_lock {
   my ($self, $url) = @_;
-  delete $self->locks->{$url};
+  delete $self->{locks}->{$url};
 }
 
 1;
