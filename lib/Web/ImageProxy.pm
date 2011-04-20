@@ -12,6 +12,7 @@ use List::Util qw/shuffle/;
 use List::MoreUtils qw/any/;
 use Digest::SHA1 qw/sha1_hex/;
 
+use Plack::Util;
 use Plack::Util::Accessor qw/cache cache_root max_size allowed_referers/;
 
 use parent 'Plack::Component';
@@ -68,7 +69,7 @@ sub asset_res {
     return [
       200,
       ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
-      $file->openr
+      Plack::Util::set_io_path($file->openr),
     ];
   }
 }
@@ -141,7 +142,7 @@ sub handle_url {
         return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
 
-      return [200, $meta->{headers}, $file->openr];
+      return [200, $meta->{headers}, Plack::Util::set_io_path($file->openr)];
     }
   }
 
@@ -245,7 +246,7 @@ sub download {
         modified => $modified,
       });
 
-      $self->lock_respond($url,[200, \@headers, $fh]);
+      $self->lock_respond($url,[200, \@headers, Plack::Util::set_io_path($fh)]);
     }
 }
 
