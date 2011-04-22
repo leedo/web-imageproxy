@@ -10,7 +10,6 @@ use URI::Escape;
 
 use File::Spec;
 use File::Path qw/make_path/;
-use List::Util qw/shuffle/;
 use JSON;
 
 use List::MoreUtils qw/any/;
@@ -34,8 +33,8 @@ sub prepare_app {
   $self->{max_size} = 2097152 * 2     unless defined $self->{max_size};
   $self->{allowed_referers} = []      unless defined $self->{allowed_referers};
 
-  $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
-  make_path $self->{cache_root}     unless -e $self->{cache_root};
+  $self->{cache_root} = "./cache"     unless defined $self->{cache_root};
+  make_path $self->{cache_root}       unless -e $self->{cache_root};
 
   $self->{locks} = {};
 }
@@ -265,20 +264,20 @@ sub download {
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
 
-      my @headers = (
-        "Content-Type" => $headers->{'content-type'},
+      my $headers = [
+        "Content-Type"   => $headers->{'content-type'},
         "Content-Length" => $length,
-        "Cache-Control" => "public, max-age=86400",
-        "Last-Modified" => $modified,
-        "ETag" => $etag,
-      );
+        "Cache-Control"  => "public, max-age=86400",
+        "Last-Modified"  => $modified,
+        "ETag"           => $etag,
+      ];
 
       $self->save_meta($url, {
-        file => $file,
-        headers => \@headers,
+        file    => $file,
+        headers => $headers,
       });
 
-      $self->lock_respond($url,[200, \@headers, $fh]);
+      $self->lock_respond($url,[200, $headers, $fh]);
     }
 }
 
