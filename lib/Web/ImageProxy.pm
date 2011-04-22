@@ -261,23 +261,20 @@ sub download {
       open $fh, "<", $file;
       Plack::Util::set_io_path($fh, $file);
 
-      my $modified = $headers->{last_modified} || time2str(time);
-      my $etag = $headers->{etag} || sha1_hex($url);
-
-      my $headers = [
+      my $h = [
         "Content-Type"   => $headers->{'content-type'},
         "Content-Length" => $length,
         "Cache-Control"  => "public, max-age=86400",
-        "Last-Modified"  => $modified,
-        "ETag"           => $etag,
+        "Last-Modified"  => $headers->{last_modified} || time2str(time),
+        "ETag"           => $headers->{etag}          || sha1_hex($url),
       ];
 
       $self->save_meta($url, {
         file    => $file,
-        headers => $headers,
+        headers => $h,
       });
 
-      $self->lock_respond($url,[200, $headers, $fh]);
+      $self->lock_respond($url,[200, $h, $fh]);
     }
 }
 
