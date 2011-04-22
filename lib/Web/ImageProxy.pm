@@ -95,16 +95,16 @@ sub valid_referer {
 }
 
 sub is_unchanged {
-  my ($self, $meta, $env) = @_;
+  my ($self, $headers, $env) = @_;
 
   my $modified = $env->{"HTTP_IF_MODIFIED_SINCE"};
   my $etag = $env->{"IF_NONE_MATCH"};
 
   if ($modified) {
-    return $modified eq $meta->{modified}
+    return $modified eq (Plack::Util::header_get($headers, 'Last-Modified') || "");
   }
   elsif ($etag) {
-    return $etag eq $meta->{etag};
+    return $etag eq (Plack::Util::header_get($headers, 'ETag') || "");
   }
 
   return 0;
@@ -162,27 +162,25 @@ sub cached_res {
     return;
   }
 
-  my $file = $self->key_to_path($url);
+  my ($headers, $file) = map {$meta->{$_}} qw/headers file/;
 
-  if ($meta->{headers} and -e $file) {
-      
-    if ($self->is_unchanged($meta, $env)) {
-      $self->lock_respond($url, [
-        304,
-        ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}],
-        []
-      ]);
+  if ($headers and $file and -e $file) {
+    if ($self->is_unchanged($headers, $env)) {
+      my $h = [map {$_ => Plack::Util::header_get($headers, $_)} qw/ETag Last-Modified/];
+      $self->lock_respond($url, [304, $h, []]);
       return 
     }
 
     open my $fh, "<", $file or die $!;
     Plack::Util::set_io_path($fh, "$file");
       
-    $self->lock_respond($url, [200, $meta->{headers}, $fh]);
+    $self->lock_respond($url, [200, $headers, $fh]);
   }
   else {
-    # should never get here.
-    $self->lock_respond($url, $self->asset_res("cannotread"));
+
+    # should never have meta and a missing file,
+    # but just in case.
+    $self->download($url);
   }
 }
 
@@ -276,9 +274,8 @@ sub download {
       );
 
       $self->save_meta($url, {
+        file => $file,
         headers => \@headers,
-        etag => $etag,
-        modified => $modified,
       });
 
       $self->lock_respond($url,[200, \@headers, $fh]);
