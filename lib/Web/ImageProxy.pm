@@ -3,17 +3,20 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
-use CHI;
-use Path::Class qw/dir file/;
-use URI::Escape;
 use AnyEvent::HTTP;
 use HTTP::Date;
+use URI::Escape;
+
+use File::Spec;
+use File::Path qw/make_path/;
 use List::Util qw/shuffle/;
+use JSON;
+
 use List::MoreUtils qw/any/;
 use Digest::SHA1 qw/sha1_hex/;
 
 use Plack::Util;
-use Plack::Util::Accessor qw/cache cache_root max_size allowed_referers/;
+use Plack::Util::Accessor qw/cache_root max_size allowed_referers/;
 
 use parent 'Plack::Component';
 
@@ -28,25 +31,10 @@ sub prepare_app {
   $self->{max_size} = 2097152 * 2     unless defined $self->{max_size};
   $self->{allowed_referers} = []      unless defined $self->{allowed_referers};
 
-  unless (defined $self->{cache}) {
-    $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
-    $self->{cache} = $self->build_cache;
-  }
+  $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
+  make_path $self->{cache_root}     unless -e $self->{cache_root};
 
   $self->{locks} = {};
-}
-
-sub build_cache {
-  my $self = shift;
-
-  my $r = dir($self->cache_root);
-  $r->mkpath unless -e $r;
-
-  return CHI->new(
-    driver => "File",
-    root_dir => "$r",
-    expires_in => 2419200, # one month
-  );
 }
 
 sub call {
@@ -65,14 +53,14 @@ sub call {
 sub asset_res {
   my ($self, $name) = @_;
 
-  my $file = file("static/image/$name.gif");
-  my $fh = $file->openr;
+  my $file = "static/image/$name.gif";
+  open my $fh, "<", $file or die $!;
   Plack::Util::set_io_path($fh, "$file");
 
   if ($file) {
     return [
       200,
-      ["Content-Type", "image/gif", "Content-Length", $file->stat->size],
+      ["Content-Type", "image/gif", "Content-Length", (stat($file))[7]],
       $fh,
     ];
   }
@@ -119,6 +107,41 @@ sub is_unchanged {
   return 0;
 }
 
+sub key_to_path {
+  my ($self, $url) = @_;
+
+  # hash url to get 2 characters for dirs
+  my $hash = sha1_hex($url);
+
+  my $dir = File::Spec->catdir($self->{cache_root}, split("", substr($hash, 0, 2)));
+  my $file = File::Spec->catfile($dir, $hash);
+
+  wantarray ? ($dir, $file) : $file;
+}
+
+sub save_meta {
+  my ($self, $url, $data) = @_;
+
+  my ($dir, $file) = $self->key_to_path("$url-meta");
+  make_path $dir if !-e $dir;
+
+  open my $fh, ">", $file or die $!;
+  print $fh encode_json($data);
+}
+
+sub get_meta {
+  my ($self, $url) = @_;
+
+  my $file = $self->key_to_path("$url-meta");
+
+  if (-e $file) {
+    open my $fh, "<", $file or die $!;
+    local $/;
+    my $data = <$fh>;
+    return decode_json($data);
+  }
+}
+
 sub handle_url {
   my ($self, $url, $env) = @_;
 
@@ -129,24 +152,24 @@ sub handle_url {
     };
   }
 
-  my $file = file($self->cache->path_to_key($url));
-  my $meta = $self->cache->get("$url-meta");
+  my $meta = $self->get_meta($url);
   my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
   if (!$uncache and $meta) { # info cached
-    my $resp;
 
     if (my $error = $meta->{error}) {
       return $self->$error;
     }
 
-    elsif ($meta->{headers} and -e $file) {
+    my $file = $self->key_to_path($url);
+
+    if ($meta->{headers} and -e $file) {
       
       if ($self->is_unchanged($meta, $env)) {
         return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
       }
 
-      my $fh = $file->openr;
+      open my $fh, "<", $file or die $!;
       Plack::Util::set_io_path($fh, "$file");
       
       return [200, $meta->{headers}, $fh];
@@ -164,9 +187,9 @@ sub handle_url {
 sub download {
   my ($self, $url) = @_;
 
-  my $cache = file($self->cache->path_to_key($url));
-  $cache->parent->mkpath;
-  my $fh = $cache->openw;
+  my ($dir, $file) = $self->key_to_path($url);
+  make_path $dir unless -e $dir;
+  open my $fh, ">", $file or die $!;
 
   my $length = 0;
   my $is_image = 0;
@@ -195,7 +218,7 @@ sub download {
           }
           else {
             $self->lock_respond($url, $self->asset_res("badformat"));
-            $cache->remove;
+            unlink $file;
             return 0;
           }
         }
@@ -204,7 +227,7 @@ sub download {
 
       if ($length > $self->max_size) {
         $self->lock_respond($url, $self->asset_res("toolarge"));
-        $cache->remove;
+        unlink $file;
         return 0;
       }
 
@@ -229,15 +252,15 @@ sub download {
         }
         else {
           $self->lock_respond($url, $self->asset_res("badformat"));
-          $cache->remove;
+          unlink $file;
           return;
         }
       }
 
       close $fh;
 
-      $fh = $cache->openr;
-      Plack::Util::set_io_path($fh, "$cache");
+      open $fh, "<", $file;
+      Plack::Util::set_io_path($fh, $file);
 
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
@@ -250,7 +273,7 @@ sub download {
         "ETag" => $etag,
       );
 
-      $self->cache->set("$url-meta", {
+      $self->save_meta($url, {
         headers => \@headers,
         etag => $etag,
         modified => $modified,
@@ -272,7 +295,7 @@ sub check_headers {
 
   if ($length and $length > $self->max_size) {
     $self->lock_respond($url, $self->asset_res("toolarge"));
-    $self->cache->set("$url-meta", {error => "toolarge"});
+    $self->save_meta($url, {error => "toolarge"});
     return 0;
   }
 
