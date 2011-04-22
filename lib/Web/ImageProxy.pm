@@ -3,6 +3,7 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
+use AnyEvent::Redis;
 use AnyEvent::HTTP;
 use HTTP::Date;
 use URI::Escape;
@@ -19,6 +20,8 @@ use Plack::Util;
 use Plack::Util::Accessor qw/cache_root max_size allowed_referers/;
 
 use parent 'Plack::Component';
+
+my $REDIS = AnyEvent::Redis->new;
 
 our $REQ_HEADERS = {
   "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
@@ -121,67 +124,66 @@ sub key_to_path {
 
 sub save_meta {
   my ($self, $url, $data) = @_;
-
-  my ($dir, $file) = $self->key_to_path("$url-meta");
-  make_path $dir if !-e $dir;
-
-  open my $fh, ">", $file or die $!;
-  print $fh encode_json($data);
+  return if $url =~ /(gravatar\.com|\?.*uncache=1)/;
+  
+  $REDIS->set($url => encode_json($data), sub {});
 }
 
 sub get_meta {
-  my ($self, $url) = @_;
+  my ($self, $url, $cb) = @_;
 
-  my $file = $self->key_to_path("$url-meta");
-
-  if (-e $file) {
-    open my $fh, "<", $file or die $!;
-    local $/;
-    my $data = <$fh>;
-    return decode_json($data);
-  }
+  $REDIS->get($url, sub {
+    $_[0] ? $cb->(decode_json $_[0]) : $cb->();
+  });
 }
 
 sub handle_url {
   my ($self, $url, $env) = @_;
 
-  if ($self->has_lock($url)) { # downloading
-    return sub {
-      my $cb = shift;
-      $self->add_lock_callback($url, $cb);
-    };
-  }
+  return sub {
+    my $respond = shift;
+    my $downloading = $self->has_lock($url);
 
-  my $meta = $self->get_meta($url);
-  my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
+    $self->add_lock_callback($url, $respond);
 
-  if (!$uncache and $meta) { # info cached
+    return if $downloading;
 
-    if (my $error = $meta->{error}) {
-      return $self->$error;
-    }
-
-    my $file = $self->key_to_path($url);
-
-    if ($meta->{headers} and -e $file) {
-      
-      if ($self->is_unchanged($meta, $env)) {
-        return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
-      }
-
-      open my $fh, "<", $file or die $!;
-      Plack::Util::set_io_path($fh, "$file");
-      
-      return [200, $meta->{headers}, $fh];
-    }
-  }
-
-  return sub { # new download
-    my $cb = shift;
-    $self->add_lock_callback($url, $cb); 
-    $self->download($url);
+    $self->get_meta($url, sub {
+      $_[0] ? $self->cached_res($url, $env, $_[0]) : $self->download($url);
+    });
   };
+}
 
+sub cached_res {
+  my ($self, $url, $env, $meta) = @_;
+
+  if (my $error = $meta->{error}) {
+    $self->lock_respond($url, $self->asset_res($error));
+    return;
+  }
+
+  my $file = $self->key_to_path($url);
+
+  if ($meta->{headers} and -e $file) {
+      
+    if ($self->is_unchanged($meta, $env)) {
+      $self->lock_respond($url, [
+        304,
+        ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}],
+        []
+      ]);
+      return 
+    }
+
+    open my $fh, "<", $file or die $!;
+    Plack::Util::set_io_path($fh, "$file");
+      
+    $self->lock_respond($url, [200, $meta->{headers}, $fh]);
+  }
+  else {
+    # should never get here.
+    $self->lock_respond($url, $self->asset_res("cannotread"));
+  }
 }
 
 sub download {
