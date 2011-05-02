@@ -55,7 +55,6 @@ sub asset_res {
 
   my $file = "static/image/$name.gif";
   open my $fh, "<", $file or die $!;
-  Plack::Util::set_io_path($fh, "$file");
 
   if ($file) {
     return [
@@ -158,7 +157,7 @@ sub handle_url {
   if (!$uncache and $meta) { # info cached
 
     if (my $error = $meta->{error}) {
-      return $self->$error;
+      return $self->asset_res($error);
     }
 
     my $file = $self->key_to_path($url);
@@ -170,8 +169,6 @@ sub handle_url {
       }
 
       open my $fh, "<", $file or die $!;
-      Plack::Util::set_io_path($fh, "$file");
-      
       return [200, $meta->{headers}, $fh];
     }
   }
@@ -260,7 +257,6 @@ sub download {
       close $fh;
 
       open $fh, "<", $file;
-      Plack::Util::set_io_path($fh, $file);
 
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
