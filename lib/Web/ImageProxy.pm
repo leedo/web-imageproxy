@@ -31,6 +31,7 @@ sub prepare_app {
   $self->{max_size} = 2097152 * 2     unless defined $self->{max_size};
   $self->{allowed_referers} = []      unless defined $self->{allowed_referers};
 
+  $self->{static_dir} = "./static"  unless defined $self->{static_dir};
   $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
   make_path $self->{cache_root}     unless -e $self->{cache_root};
 
@@ -53,7 +54,7 @@ sub call {
 sub asset_res {
   my ($self, $name) = @_;
 
-  my $file = "static/image/$name.gif";
+  my $file = "$self->{static_dir}/image/$name.gif";
   open my $fh, "<", $file or die $!;
 
   if ($file) {
@@ -214,6 +215,7 @@ sub download {
             $image_header = '';
           }
           else {
+            warn "huh";
             $self->lock_respond($url, $self->asset_res("badformat"));
             unlink $file;
             return 0;
