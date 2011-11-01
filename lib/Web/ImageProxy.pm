@@ -215,7 +215,6 @@ sub download {
             $image_header = '';
           }
           else {
-            warn "huh";
             $self->lock_respond($url, $self->asset_res("badformat"));
             unlink $file;
             return 0;
