@@ -289,6 +289,7 @@ sub download {
         });
       }
       else {
+        open $fh, "<", $file;
         $self->lock_respond($url,[200, $res_headers, $fh]);
       }
     }
