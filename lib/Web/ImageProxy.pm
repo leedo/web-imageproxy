@@ -289,7 +289,7 @@ sub download {
         });
       }
       else {
-        $self->lock_respond($url,[200, $headers, $fh]);
+        $self->lock_respond($url,[200, $res_headers, $fh]);
       }
     }
 }
