@@ -7,6 +7,7 @@ use AnyEvent::Worker;
 use AnyEvent::HTTP;
 use HTTP::Date;
 use URI::Escape;
+use Plack::Util;
 
 use File::Spec;
 use File::Path qw/make_path/;
@@ -29,8 +30,8 @@ our $REQ_HEADERS = {
 sub prepare_app {
   my $self = shift;
 
-  $self->{max_size} = 2097152 * 2     unless defined $self->{max_size};
-  $self->{allowed_referers} = []      unless defined $self->{allowed_referers};
+  $self->{max_size} = 10485760      unless defined $self->{max_size};
+  $self->{allowed_referers} = []    unless defined $self->{allowed_referers};
 
   $self->{static_dir} = "./static"  unless defined $self->{static_dir};
   $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
@@ -262,26 +263,34 @@ sub download {
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
 
-      my @headers = (
+      my $res_headers = [
         "Content-Type" => $headers->{'content-type'},
+        "Content-Length" => $length,
         "Cache-Control" => "public, max-age=86400",
         "Last-Modified" => $modified,
         "ETag" => $etag,
-      );
+      ];
 
       $self->save_meta($url, {
-        headers => \@headers,
+        headers => $res_headers,
         etag => $etag,
         modified => $modified,
       });
 
-      $self->{resizer}->do(resize => $file, "", 300, sub {
-        my (undef, $length) = @_;
-        warn $@ if $@;
-        open $fh, "<", $file;
-        push @headers, "Content-Length", $length;
-        $self->lock_respond($url,[200, \@headers, $fh]);
-      });
+      if ($length > 102400) {
+        return $self->{resizer}->do(resize => $file, "", 300, sub {
+          my (undef, $resized_length) = @_;
+          if (!$@ and $resized_length) {
+            Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
+            Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
+          }
+          open $fh, "<", $file;
+          $self->lock_respond($url,[200, $res_headers, $fh]);
+        });
+      }
+      else {
+        $self->lock_respond($url,[200, $headers, $fh]);
+      }
     }
 }
 
@@ -401,7 +410,7 @@ sub resize {
   my ($in, $out, $err);
   $err = Symbol::gensym;
 
-  my @command = ("convert", $file, "-resize", $width."x$height>", $file);
+  my @command = ("convert", $file."[0]", "-resize", $width."x$height>", $file);
   my $pid = open3($in, $out, $err, @command);
   waitpid($pid, 0);
 
