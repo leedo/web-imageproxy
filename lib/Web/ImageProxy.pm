@@ -3,6 +3,7 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
+use AnyEvent::Worker;
 use AnyEvent::HTTP;
 use HTTP::Date;
 use URI::Escape;
@@ -36,6 +37,7 @@ sub prepare_app {
   make_path $self->{cache_root}     unless -e $self->{cache_root};
 
   $self->{locks} = {};
+  $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer']);
 }
 
 sub call {
@@ -257,8 +259,6 @@ sub download {
 
       close $fh;
 
-      open $fh, "<", $file;
-
       my $modified = $headers->{last_modified} || time2str(time);
       my $etag = $headers->{etag} || sha1_hex($url);
 
@@ -276,7 +276,11 @@ sub download {
         modified => $modified,
       });
 
-      $self->lock_respond($url,[200, \@headers, $fh]);
+      $self->{resizer}->do(resize => $file, "", 300, sub {
+        warn $@ if $@;
+        open $fh, "<", $file;
+        $self->lock_respond($url,[200, \@headers, $fh]);
+      });
     }
 }
 
@@ -378,6 +382,33 @@ sub add_lock_callback {
 sub remove_lock {
   my ($self, $url) = @_;
   delete $self->{locks}->{$url};
+}
+
+package Web::ImageProxy::Resizer;
+
+use IPC::Open3;
+use Symbol;
+
+sub new {
+  my ($class, %args) = @_;
+  bless \%args, $class;
+}
+
+sub resize {
+  my ($self, $file, $width, $height) = @_;
+
+  my ($in, $out, $err);
+  $err = Symbol::gensym;
+
+  my @command = ("convert", $file, "-resize", $width."x".$height, $file);
+  my $pid = open3($in, $out, $err, @command);
+  waitpid($pid, 0);
+
+  local $/;
+  my $errors = <$err>;
+  die $errors if $errors;
+
+  return 1;
 }
 
 1;
