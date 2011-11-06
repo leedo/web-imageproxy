@@ -305,7 +305,7 @@ sub check_headers {
     return 0;
   }
 
-  if ($length and $length > $self->max_size) {
+  if ($length and $length =~ /^\d+$/ and $length > $self->max_size) {
     $self->lock_respond($url, $self->asset_res("toolarge"));
     $self->save_meta($url, {error => "toolarge"});
     return 0;
