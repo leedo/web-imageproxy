@@ -264,7 +264,6 @@ sub download {
 
       my @headers = (
         "Content-Type" => $headers->{'content-type'},
-        "Content-Length" => $length,
         "Cache-Control" => "public, max-age=86400",
         "Last-Modified" => $modified,
         "ETag" => $etag,
@@ -277,8 +276,10 @@ sub download {
       });
 
       $self->{resizer}->do(resize => $file, "", 300, sub {
+        my (undef, $length) = @_;
         warn $@ if $@;
         open $fh, "<", $file;
+        push @headers, "Content-Length", $length;
         $self->lock_respond($url,[200, \@headers, $fh]);
       });
     }
@@ -408,7 +409,7 @@ sub resize {
   my $errors = <$err>;
   die $errors if $errors;
 
-  return 1;
+  return((stat($file))[7]);
 }
 
 1;
