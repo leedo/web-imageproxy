@@ -401,7 +401,7 @@ sub resize {
   my ($in, $out, $err);
   $err = Symbol::gensym;
 
-  my @command = ("convert", $file, "-resize", $width."x".$height, $file);
+  my @command = ("convert", $file, "-resize", $width."x$height>", $file);
   my $pid = open3($in, $out, $err, @command);
   waitpid($pid, 0);
 
