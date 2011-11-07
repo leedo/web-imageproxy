@@ -419,6 +419,7 @@ sub resize {
   my $errors = <$err>;
   die $errors if $errors;
 
+  close $_ for ($in, $out, $err);
   return((stat($file))[7]);
 }
 
