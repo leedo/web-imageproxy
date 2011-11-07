@@ -280,10 +280,13 @@ sub download {
       if ($length > 102400) {
         return $self->{resizer}->do(resize => $file, "", 300, sub {
           my (undef, $resized_length) = @_;
-          if (!$@ and $resized_length) {
-            Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
-            Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
+          if ($@ or !$resized_length) {
+            warn "resizer error";
+            warn $@ if $@;
+            $resized_length = (stat($file))[7];
           }
+          Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
+          Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
           open $fh, "<", $file;
           $self->lock_respond($url,[200, $res_headers, $fh]);
         });
@@ -397,8 +400,7 @@ sub remove_lock {
 
 package Web::ImageProxy::Resizer;
 
-use IPC::Open3;
-use Symbol;
+use Capture::Tiny qw/capture/;
 
 sub new {
   my ($class, %args) = @_;
@@ -408,18 +410,9 @@ sub new {
 sub resize {
   my ($self, $file, $width, $height) = @_;
 
-  my ($in, $out, $err);
-  $err = Symbol::gensym;
-
   my @command = ("convert", $file."[0]", "-resize", $width."x$height>", $file);
-  my $pid = open3($in, $out, $err, @command);
-  waitpid($pid, 0);
-
-  local $/;
-  my $errors = <$err>;
-  die $errors if $errors;
-
-  close $_ for ($in, $out, $err);
+  my ($out, $err) = capture { system(@command) };
+  die $err if $err;
   return((stat($file))[7]);
 }
 
