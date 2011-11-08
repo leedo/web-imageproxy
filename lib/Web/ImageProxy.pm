@@ -279,12 +279,8 @@ sub download {
 
       if ($length > 102400) {
         return $self->{resizer}->do(resize => $file, "", 300, sub {
-          my (undef, $resized_length) = @_;
-          if ($@ or !$resized_length) {
-            warn "resizer error";
-            warn $@ if $@;
-            $resized_length = (stat($file))[7];
-          }
+          warn $@ if $@;
+          my $resized_length = (stat($file))[7];
           Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
           Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
           open $fh, "<", $file;
@@ -350,7 +346,6 @@ sub get_mime_type {
   return undef;
 }
 
-
 sub build_url {
   my $env = shift;
   my $url = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
@@ -413,7 +408,6 @@ sub resize {
   my @command = ("convert", $file."[0]", "-resize", $width."x$height>", $file);
   my ($out, $err) = capture { system(@command) };
   die $err if $err;
-  return((stat($file))[7]);
 }
 
 1;
