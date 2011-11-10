@@ -46,12 +46,13 @@ sub call {
 
   return $self->not_found      if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
 
+  my $still = $env->{REQUEST_URI} =~ s/^\/still//;
   my $url = build_url($env);
 
   return $self->not_found      unless $url;
   return $self->redirect($url) unless $self->valid_referer($env);
 
-  return $self->handle_url($url, $env);
+  return $self->handle_url($url, $still, $env);
 }
 
 sub asset_res {
@@ -123,9 +124,9 @@ sub key_to_path {
 }
 
 sub save_meta {
-  my ($self, $url, $data) = @_;
+  my ($self, $key, $data) = @_;
 
-  my ($dir, $file) = $self->key_to_path("$url-meta");
+  my ($dir, $file) = $self->key_to_path("$key-meta");
   make_path $dir if !-e $dir;
 
   open my $fh, ">", $file or die $!;
@@ -133,9 +134,9 @@ sub save_meta {
 }
 
 sub get_meta {
-  my ($self, $url) = @_;
+  my ($self, $key) = @_;
 
-  my $file = $self->key_to_path("$url-meta");
+  my $file = $self->key_to_path("$key-meta");
 
   if (-e $file) {
     open my $fh, "<", $file or die $!;
@@ -146,16 +147,18 @@ sub get_meta {
 }
 
 sub handle_url {
-  my ($self, $url, $env) = @_;
+  my ($self, $url, $still, $env) = @_;
 
-  if ($self->has_lock($url)) { # downloading
+  my $key = $url . $still;
+
+  if ($self->has_lock($key)) { # downloading
     return sub {
       my $cb = shift;
-      $self->add_lock_callback($url, $cb);
+      $self->add_lock_callback($key, $cb);
     };
   }
 
-  my $meta = $self->get_meta($url);
+  my $meta = $self->get_meta($key);
   my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
   if (!$uncache and $meta) { # info cached
@@ -164,7 +167,7 @@ sub handle_url {
       return $self->asset_res($error);
     }
 
-    my $file = $self->key_to_path($url);
+    my $file = $self->key_to_path($key);
 
     if ($meta->{headers} and -e $file) {
       
@@ -179,16 +182,17 @@ sub handle_url {
 
   return sub { # new download
     my $cb = shift;
-    $self->add_lock_callback($url, $cb); 
-    $self->download($url);
+    $self->add_lock_callback($key, $cb); 
+    $self->download($url, $still);
   };
 
 }
 
 sub download {
-  my ($self, $url) = @_;
+  my ($self, $url, $still) = @_;
 
-  my ($dir, $file) = $self->key_to_path($url);
+  my $key = $url . $still;
+  my ($dir, $file) = $self->key_to_path($key);
   make_path $dir unless -e $dir;
   open my $fh, ">", $file or die $!;
 
@@ -198,7 +202,7 @@ sub download {
 
   http_get $url,
     headers => $REQ_HEADERS,
-    on_header => sub {$self->check_headers(@_, $url)},
+    on_header => sub {$self->check_headers(@_, $key)},
     timeout => 60,
     on_body => sub {
       my ($data, $headers) = @_;
@@ -218,7 +222,7 @@ sub download {
             $image_header = '';
           }
           else {
-            $self->lock_respond($url, $self->asset_res("badformat"));
+            $self->lock_respond($key, $self->asset_res("badformat"));
             unlink $file;
             return 0;
           }
@@ -227,7 +231,7 @@ sub download {
       }
 
       if ($length > $self->max_size) {
-        $self->lock_respond($url, $self->asset_res("toolarge"));
+        $self->lock_respond($key, $self->asset_res("toolarge"));
         unlink $file;
         return 0;
       }
@@ -241,7 +245,7 @@ sub download {
 
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
-        $self->lock_respond($url, $self->asset_res("cannotread"));
+        $self->lock_respond($key, $self->asset_res("cannotread"));
         return;
       }
 
@@ -252,7 +256,7 @@ sub download {
           print $fh $image_header;
         }
         else {
-          $self->lock_respond($url, $self->asset_res("badformat"));
+          $self->lock_respond($key, $self->asset_res("badformat"));
           unlink $file;
           return;
         }
@@ -271,42 +275,42 @@ sub download {
         "ETag" => $etag,
       ];
 
-      $self->save_meta($url, {
+      $self->save_meta($key, {
         headers => $res_headers,
         etag => $etag,
         modified => $modified,
       });
 
       if ($length > 102400) {
-        return $self->{resizer}->do(resize => $file, "", 300, sub {
+        return $self->{resizer}->do(resize => $file, $still, "", 300, sub {
           warn $@ if $@;
           my $resized_length = (stat($file))[7];
           Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
           Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
           open $fh, "<", $file;
-          $self->lock_respond($url,[200, $res_headers, $fh]);
+          $self->lock_respond($key,[200, $res_headers, $fh]);
         });
       }
       else {
         open $fh, "<", $file;
-        $self->lock_respond($url,[200, $res_headers, $fh]);
+        $self->lock_respond($key,[200, $res_headers, $fh]);
       }
     }
 }
 
 sub check_headers {
-  my ($self, $headers, $url) = @_;
+  my ($self, $headers, $key) = @_;
   my ($length, $type) = @$headers{'content-length', 'content-type'};
 
   if ($headers->{Status} != 200) {
-    print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
-    $self->lock_respond($url, $self->asset_res("cannotread"));
+    print STDERR "got $headers->{Status} for $key: $headers->{Reason}\n";
+    $self->lock_respond($key, $self->asset_res("cannotread"));
     return 0;
   }
 
   if ($length and $length =~ /^\d+$/ and $length > $self->max_size) {
-    $self->lock_respond($url, $self->asset_res("toolarge"));
-    $self->save_meta($url, {error => "toolarge"});
+    $self->lock_respond($key, $self->asset_res("toolarge"));
+    $self->save_meta($key, {error => "toolarge"});
     return 0;
   }
 
@@ -403,9 +407,9 @@ sub new {
 }
 
 sub resize {
-  my ($self, $file, $width, $height) = @_;
+  my ($self, $file, $still, $width, $height) = @_;
 
-  my @command = ("convert", $file."[0]", "-resize", $width."x$height>", $file);
+  my @command = ("convert", $file.($still ? "[0]" : ""), "-resize", $width."x$height>", $file);
   my ($out, $err) = capture { system(@command) };
   die $err if $err;
 }
