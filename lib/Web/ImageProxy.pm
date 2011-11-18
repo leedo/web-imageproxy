@@ -275,23 +275,30 @@ sub download {
         "ETag" => $etag,
       ];
 
-      $self->save_meta($key, {
-        headers => $res_headers,
-        etag => $etag,
-        modified => $modified,
-      });
-
       if ($length > 102400) {
         return $self->{resizer}->do(resize => $file, $still, "", 300, sub {
           warn $@ if $@;
           my $resized_length = (stat($file))[7];
           Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
           Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
+
+          $self->save_meta($key, {
+            headers => $res_headers,
+            etag => $etag,
+            modified => $modified,
+          });
+
           open $fh, "<", $file;
           $self->lock_respond($key,[200, $res_headers, $fh]);
         });
       }
       else {
+        $self->save_meta($key, {
+          headers => $res_headers,
+          etag => $etag,
+          modified => $modified,
+        });
+
         open $fh, "<", $file;
         $self->lock_respond($key,[200, $res_headers, $fh]);
       }
