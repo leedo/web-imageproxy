@@ -275,21 +275,26 @@ sub download {
         "ETag" => $etag,
       ];
 
-      return $self->{resizer}->do(resize => $file, $still, "", 300, sub {
-        my (undef, $resized_length) = @_;
-        warn $@ if $@;
-        Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
-        Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
+      $self->save_meta($key, {
+        headers => $res_headers,
+        etag => $etag,
+        modified => $modified,
+      });
 
-        $self->save_meta($key, {
-          headers => $res_headers,
-          etag => $etag,
-          modified => $modified,
+      if ($length > 102400) {
+        return $self->{resizer}->do(resize => $file, $still, "", 300, sub {
+          warn $@ if $@;
+          my $resized_length = (stat($file))[7];
+          Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
+          Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
+          open $fh, "<", $file;
+          $self->lock_respond($key,[200, $res_headers, $fh]);
         });
-
+      }
+      else {
         open $fh, "<", $file;
         $self->lock_respond($key,[200, $res_headers, $fh]);
-      });
+      }
     }
 }
 
@@ -394,7 +399,7 @@ sub remove_lock {
 
 package Web::ImageProxy::Resizer;
 
-use Image::Magick;
+use Capture::Tiny qw/capture/;
 
 sub new {
   my ($class, %args) = @_;
@@ -404,18 +409,9 @@ sub new {
 sub resize {
   my ($self, $file, $still, $width, $height) = @_;
 
-  my $image = Image::Magick->new;
-  $image->Read($file);
-  my $count = scalar @$image;
-
-  # ugh, just let animated gifs through
-  if (($count > 1 and !$still) or $image->[0]->Get("height") <= 300) {
-    return $image->Get("filesize");
-  }
-
-  $image->[0]->Resize($width."x$height>");
-  $image->[0]->Write($file);
-  return $image->[0]->Get("filesize");
+  my @command = ("convert", $file.($still ? "[0]" : ""), "-resize", $width."x$height>", $file);
+  my ($out, $err) = capture { system(@command) };
+  die $err if $err;
 }
 
 1;
