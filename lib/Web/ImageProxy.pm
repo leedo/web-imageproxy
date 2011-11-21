@@ -46,8 +46,7 @@ sub call {
 
   return $self->not_found      if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
 
-  my $still = $env->{REQUEST_URI} =~ s/^\/still//;
-  my $url = build_url($env);
+  my ($still, $url) = build_url($env);
 
   return $self->not_found      unless $url;
   return $self->redirect($url) unless $self->valid_referer($env);
@@ -360,13 +359,14 @@ sub get_mime_type {
 sub build_url {
   my $env = shift;
   my $url = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
+  my $still = $url =~ s/^\/still//;
   $url =~ s{^/+}{};
   $url =~ s/&amp;/&/g;
   return if !$url or $url eq "/";
   $url =~ s{^(https?:/)([^/])}{$1/$2}i;
   $url = "http://$url" unless $url =~ /^https?/i;
   $url =~ s/\s/%20/g;
-  return $url;
+  return ($still, $url);
 }
 
 sub lock_respond {
