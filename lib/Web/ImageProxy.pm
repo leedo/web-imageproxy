@@ -54,21 +54,6 @@ sub call {
   return $self->handle_url($url, $still, $env);
 }
 
-sub asset_res {
-  my ($self, $name) = @_;
-
-  my $file = "$self->{static_dir}/image/$name.gif";
-  open my $fh, "<", $file or die $!;
-
-  if ($file) {
-    return [
-      200,
-      ["Content-Type", "image/gif", "Content-Length", (stat($file))[7]],
-      $fh,
-    ];
-  }
-}
-
 sub not_found {
   my $self = shift;
   return [
@@ -161,11 +146,6 @@ sub handle_url {
   my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
   if (!$uncache and $meta) { # info cached
-
-    if (my $error = $meta->{error}) {
-      return $self->asset_res($error);
-    }
-
     my $file = $self->key_to_path($key);
 
     if ($meta->{headers} and -e $file) {
@@ -221,7 +201,7 @@ sub download {
             $image_header = '';
           }
           else {
-            $self->lock_respond($key, $self->asset_res("badformat"));
+            $self->lock_respond($key, $self->not_found);
             unlink $file;
             return 0;
           }
@@ -230,7 +210,7 @@ sub download {
       }
 
       if ($length > $self->max_size) {
-        $self->lock_respond($key, $self->asset_res("toolarge"));
+        $self->lock_respond($key, $self->not_found);
         unlink $file;
         return 0;
       }
@@ -244,7 +224,7 @@ sub download {
 
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
-        $self->lock_respond($key, $self->asset_res("cannotread"));
+        $self->lock_respond($key, $self->not_found);
         return;
       }
 
@@ -255,7 +235,7 @@ sub download {
           print $fh $image_header;
         }
         else {
-          $self->lock_respond($key, $self->asset_res("badformat"));
+          $self->lock_respond($key, $self->not_found);
           unlink $file;
           return;
         }
@@ -274,7 +254,7 @@ sub download {
         "ETag" => $etag,
       ];
 
-      if ($length > 102400) {
+      if ($length > 102400 or $still) {
         return $self->{resizer}->do(resize => $file, $still, "", 300, sub {
           warn $@ if $@;
           my $resized_length = (stat($file))[7];
@@ -310,13 +290,12 @@ sub check_headers {
 
   if ($headers->{Status} != 200) {
     print STDERR "got $headers->{Status} for $key: $headers->{Reason}\n";
-    $self->lock_respond($key, $self->asset_res("cannotread"));
+    $self->lock_respond($key, $self->not_found);
     return 0;
   }
 
   if ($length and $length =~ /^\d+$/ and $length > $self->max_size) {
-    $self->lock_respond($key, $self->asset_res("toolarge"));
-    $self->save_meta($key, {error => "toolarge"});
+    $self->lock_respond($key, $self->not_found);
     return 0;
   }
 
