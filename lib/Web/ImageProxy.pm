@@ -414,7 +414,7 @@ sub resize {
 
   my $frames = scalar(@$image) - 1;
 
-  if ($still) {
+  if ($still and $frames > 0) {
     undef $image->[$_] for (1 .. $frames);
     $image->[0]->Composite(
       image => $self->{overlay},
