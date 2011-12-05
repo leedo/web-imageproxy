@@ -275,24 +275,13 @@ sub download {
         "ETag" => $etag,
       ];
 
-      if ($length > 102400) {
-        return $self->{resizer}->do(resize => $file, $still, "", 300, sub {
-          warn $@ if $@;
-          my $resized_length = (stat($file))[7];
-          Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
-          Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
+      $self->{resizer}->do(resize => $file, $still, ">", 300, sub {
+        warn $@ if $@;
 
-          $self->save_meta($key, {
-            headers => $res_headers,
-            etag => $etag,
-            modified => $modified,
-          });
+        my $resized_length = (stat($file))[7];
+        Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
+        Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
 
-          open $fh, "<", $file;
-          $self->lock_respond($key,[200, $res_headers, $fh]);
-        });
-      }
-      else {
         $self->save_meta($key, {
           headers => $res_headers,
           etag => $etag,
@@ -301,8 +290,8 @@ sub download {
 
         open $fh, "<", $file;
         $self->lock_respond($key,[200, $res_headers, $fh]);
-      }
-    }
+      });
+    };
 }
 
 sub check_headers {
@@ -407,6 +396,7 @@ sub remove_lock {
 package Web::ImageProxy::Resizer;
 
 use Capture::Tiny qw/capture/;
+use Image::Magick;
 
 sub new {
   my ($class, %args) = @_;
@@ -416,9 +406,24 @@ sub new {
 sub resize {
   my ($self, $file, $still, $width, $height) = @_;
 
-  my @command = ("convert", $file.($still ? "[0]" : ""), "-resize", $width."x$height>", $file);
-  my ($out, $err) = capture { system(@command) };
-  die $err if $err;
+  my $image = Image::Magick->new;
+  $image->Read($file);
+
+
+  my $frames = scalar(@$image) - 1;
+
+  if ($still) {
+    undef $image->[$_] for (1 .. $frames);
+    $frames = 0;
+  }
+
+  # only have one frame, lets resize
+  if ($frames == 0) {
+    $image->[0]->Resize($width."x".$height);
+    $image->[0]->Write($file);
+  }
+
+  undef $image;
 }
 
 1;
