@@ -378,6 +378,9 @@ use Image::Magick;
 
 sub new {
   my ($class, %args) = @_;
+  my $overlay = Image::Magick->new;
+  $overlay->Read("play_overlay.png");
+  $args{overlay} = $overlay;
   bless \%args, $class;
 }
 
@@ -387,11 +390,15 @@ sub resize {
   my $image = Image::Magick->new;
   $image->Read($file);
 
-
   my $frames = scalar(@$image) - 1;
 
   if ($still) {
     undef $image->[$_] for (1 .. $frames);
+    $image->[0]->Composite(
+      image => $self->{overlay},
+      gravity => "Center",
+      compose => "Over",
+    );
     $frames = 0;
   }
 
