@@ -275,6 +275,9 @@ sub download {
         "ETag" => $etag,
       ];
 
+      $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer'])
+        if $self->{resize_count}++ > 50;
+
       $self->{resizer}->do(resize => $file, $still, ">", 300, sub {
         warn $@ if $@;
 
