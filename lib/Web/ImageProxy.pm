@@ -430,6 +430,7 @@ sub resize {
   # only have one frame, lets resize
   if ($frames == 0) {
     $image->[0]->Resize($width."x".$height);
+    $image->[0]->AutoOrient();
     $image->[0]->Write($file);
   }
 
