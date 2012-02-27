@@ -257,7 +257,12 @@ sub download {
       $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer'])
         if $self->{resize_count}++ > 50;
 
-      $self->{resizer}->do(resize => $file, $still, ">", 300, sub {
+      # Add a ref to worker that will be removed after resize is done.
+      # This will prevent the worker from getting killed before the
+      # callback is invoked.
+      my $resizer = $self->{resizer};
+
+      $resizer->do(resize => $file, $still, ">", 300, sub {
         warn $@ if $@;
 
         my $resized_length = (stat($file))[7];
@@ -272,6 +277,7 @@ sub download {
 
         open $fh, "<", $file;
         $self->lock_respond($key,[200, $res_headers, $fh]);
+        undef $resizer;
       });
     };
 }
