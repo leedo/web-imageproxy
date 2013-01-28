@@ -38,7 +38,6 @@ sub prepare_app {
   make_path $self->{cache_root}     unless -e $self->{cache_root};
 
   $self->{locks} = {};
-  $self->{meta_cache} = {};
   $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer']);
 }
 
@@ -162,14 +161,12 @@ sub handle_url {
   my $meta = $self->get_meta($key);
 
   if ($meta) { # info cached
+    if ($self->is_unchanged($meta, $env)) {
+      return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
+    }
+
     my $file = $self->key_to_path($key);
-
     if ($meta->{headers} and -e $file) {
-      
-      if ($self->is_unchanged($meta, $env)) {
-        return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
-      }
-
       open my $fh, "<", $file or die $!;
       return [200, $meta->{headers}, $fh];
     }
