@@ -38,20 +38,37 @@ sub prepare_app {
   make_path $self->{cache_root}     unless -e $self->{cache_root};
 
   $self->{locks} = {};
+  $self->{meta_cache} = {};
   $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer']);
 }
 
 sub call {
   my ($self, $env) = @_;
 
-  return $self->not_found      if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
+  return $self->not_found if $env->{PATH_INFO} =~ /^\/?favicon.ico/;
 
-  my ($still, $url) = build_url($env);
+  my %options;
+  my $path = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
+  my @parts = grep {length $_} split "/", $path;
+
+  if ($parts[0] eq "still") {
+    $options{still} = shift @parts;
+  }
+
+  if ($parts[0] =~ /^[0-9]+$/) {
+    $options{width} = shift @parts;
+  }
+
+  if ($parts[0] =~ /^[0-9]+$/) {
+    $options{height} = shift @parts;
+  }
+
+  my $url = clean_url(join "/", @parts);
 
   return $self->not_found      unless $url;
   return $self->redirect($url) unless $self->valid_referer($env);
 
-  return $self->handle_url($url, $still, $env);
+  return $self->handle_url($url, $env, %options);
 }
 
 sub not_found {
@@ -131,9 +148,9 @@ sub get_meta {
 }
 
 sub handle_url {
-  my ($self, $url, $still, $env) = @_;
+  my ($self, $url, $env, %options) = @_;
 
-  my $key = $url . $still;
+  my $key = join "-", $url, %options;
 
   if ($self->has_lock($key)) { # downloading
     return sub {
@@ -143,9 +160,8 @@ sub handle_url {
   }
 
   my $meta = $self->get_meta($key);
-  my $uncache = $url =~ /(gravatar\.com|\?.*uncache=1)/;
 
-  if (!$uncache and $meta) { # info cached
+  if ($meta) { # info cached
     my $file = $self->key_to_path($key);
 
     if ($meta->{headers} and -e $file) {
@@ -162,15 +178,14 @@ sub handle_url {
   return sub { # new download
     my $cb = shift;
     $self->add_lock_callback($key, $cb); 
-    $self->download($url, $still);
+    $self->download($url, $key, %options);
   };
 
 }
 
 sub download {
-  my ($self, $url, $still) = @_;
+  my ($self, $url, $key, %options) = @_;
 
-  my $key = $url . $still;
   my ($dir, $file) = $self->key_to_path($key);
   make_path $dir unless -e $dir;
   open my $fh, ">", $file or die $!;
@@ -254,6 +269,12 @@ sub download {
         "ETag" => $etag,
       ];
 
+      if (!%options) {
+        open $fh, "<", $file;
+        $self->lock_respond($key, [200, $res_headers, $fh]);
+        return;
+      }
+
       $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer'])
         if $self->{resize_count}++ > 50;
 
@@ -262,7 +283,7 @@ sub download {
       # callback is invoked.
       my $resizer = $self->{resizer};
 
-      $resizer->do(resize => $file, $still, ">", 300, sub {
+      $resizer->do(resize => $file, %options, sub {
         warn $@ if $@;
 
         my $resized_length = (stat($file))[7];
@@ -333,17 +354,18 @@ sub get_mime_type {
   return undef;
 }
 
-sub build_url {
-  my $env = shift;
-  my $url = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
-  my $still = $url =~ s/^\/still//;
-  $url =~ s{^/+}{};
-  $url =~ s/&amp;/&/g;
-  return if !$url or $url eq "/";
-  $url =~ s{^(https?:/)([^/])}{$1/$2}i;
-  $url = "http://$url" unless $url =~ /^https?/i;
-  $url =~ s/\s/%20/g;
-  return ($still, $url);
+sub clean_url {
+  my $path = shift;
+  $path =~ s{^/+}{};
+
+  return if !$path or $path eq "/";
+
+  $path =~ s/&amp;/&/g;
+  $path =~ s/\s/%20/g;
+  $path =~ s{^(https?:/)([^/])}{$1/$2}i;
+  $path = "http://$path" unless $path =~ /^https?/i;
+
+  return $path;
 }
 
 sub lock_respond {
@@ -394,14 +416,14 @@ sub new {
 }
 
 sub resize {
-  my ($self, $file, $still, $width, $height) = @_;
+  my ($self, $file, %options) = @_;
 
   my $image = Image::Magick->new;
   $image->Read($file);
 
   my $frames = scalar(@$image) - 1;
 
-  if ($still and $frames > 0) {
+  if ($options{still} and $frames > 0) {
     undef $image->[$_] for (1 .. $frames);
     $image->[0]->Composite(
       image => $self->{overlay},
@@ -413,7 +435,10 @@ sub resize {
 
   # only have one frame, lets resize
   if ($frames == 0) {
-    $image->[0]->Resize($width."x".$height);
+    if ($options{width} or $options{height}) {
+      my $resize = join "x", ($options{width} || ">"), ($options{height} || ">");
+      $image->[0]->Resize($resize);
+    }
     $image->[0]->AutoOrient();
     $image->[0]->Write($file);
   }
