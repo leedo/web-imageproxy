@@ -3,7 +3,7 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
-use AnyEvent::Worker;
+use AnyEvent::Fork::Pool;
 use AnyEvent::HTTP;
 use HTTP::Date;
 use URI::Escape;
@@ -38,7 +38,12 @@ sub prepare_app {
   make_path $self->{cache_root}     unless -e $self->{cache_root};
 
   $self->{locks} = {};
-  $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer']);
+  $self->{resizer} = AnyEvent::Fork
+    ->new
+    ->require('Web::ImageProxy::Resizer')
+    ->AnyEvent::Fork::Pool::run(
+      "Web::ImageProxy::Resizer::resize",
+    );
 }
 
 sub call {
@@ -272,15 +277,7 @@ sub download {
         return;
       }
 
-      $self->{resizer} = AnyEvent::Worker->new(['Web::ImageProxy::Resizer'])
-        if $self->{resize_count}++ > 50;
-
-      # Add a ref to worker that will be removed after resize is done.
-      # This will prevent the worker from getting killed before the
-      # callback is invoked.
-      my $resizer = $self->{resizer};
-
-      $resizer->do(resize => $file, %options, sub {
+      $self->{resizer}->($file, %options, sub {
         warn $@ if $@;
 
         my $resized_length = (stat($file))[7];
@@ -295,7 +292,6 @@ sub download {
 
         open $fh, "<", $file;
         $self->lock_respond($key,[200, $res_headers, $fh]);
-        undef $resizer;
       });
     };
 }
@@ -398,49 +394,6 @@ sub add_lock_callback {
 sub remove_lock {
   my ($self, $url) = @_;
   delete $self->{locks}->{$url};
-}
-
-package Web::ImageProxy::Resizer;
-
-use Image::Magick;
-
-sub new {
-  my ($class, %args) = @_;
-  my $overlay = Image::Magick->new;
-  $overlay->Read("play_overlay.png");
-  $args{overlay} = $overlay;
-  bless \%args, $class;
-}
-
-sub resize {
-  my ($self, $file, %options) = @_;
-
-  my $image = Image::Magick->new;
-  $image->Read($file);
-
-  my $frames = scalar(@$image) - 1;
-
-  if ($options{still} and $frames > 0) {
-    undef $image->[$_] for (1 .. $frames);
-    $image->[0]->Composite(
-      image => $self->{overlay},
-      gravity => "Center",
-      compose => "Over",
-    );
-    $frames = 0;
-  }
-
-  # only have one frame, lets resize
-  if ($frames == 0) {
-    if ($options{width} or $options{height}) {
-      my $resize = join "x", ($options{width} || ">"), ($options{height} || ">");
-      $image->[0]->Resize($resize);
-    }
-    $image->[0]->AutoOrient();
-    $image->[0]->Write($file);
-  }
-
-  undef $image;
 }
 
 1;
