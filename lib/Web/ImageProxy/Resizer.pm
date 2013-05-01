@@ -35,7 +35,7 @@ sub resize {
       my $resize = join "x", ($options{width} || ">"), ($options{height} || ">");
       $image->[0]->Resize($resize);
     }
-    $image->[0]->AutoOrient();
+    #$image->[0]->AutoOrient();
     $image->[0]->Write($file);
   }
 
