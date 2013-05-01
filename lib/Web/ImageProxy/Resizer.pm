@@ -2,11 +2,17 @@ package Web::ImageProxy::Resizer;
 
 use Image::Magick;
 
+my $counter = 0;
 our $overlay = Image::Magick->new;
 $overlay->Read("play_overlay.png");
 
 sub resize {
   my ($file, %options) = @_;
+
+  if ($counter++ > 250) {
+    AnyEvent::Fork::Pool::retire();
+    $counter = 0;
+  }
 
   my $image = Image::Magick->new;
   $image->Read($file);
