@@ -3,6 +3,7 @@ package Web::ImageProxy;
 use strict;
 use warnings;
 
+use AnyEvent::Fork;
 use AnyEvent::Fork::Pool;
 use AnyEvent::HTTP;
 use HTTP::Date;
@@ -12,7 +13,7 @@ use Plack::Util;
 use File::Spec;
 use File::Path qw/make_path/;
 use List::Util qw/shuffle/;
-use JSON;
+use JSON::XS;
 
 use List::MoreUtils qw/any/;
 use Digest::SHA1 qw/sha1_hex/;
@@ -65,6 +66,12 @@ sub call {
 
   if ($parts[0] =~ /^[0-9]+$/) {
     $options{height} = shift @parts;
+  }
+
+  if (defined $options{height} and $options{height} == 0 and
+       defined $options{width} and $options{width} == 0) {
+    delete $options{height};
+    delete $options{width};
   }
 
   my $url = clean_url(join "/", @parts);
