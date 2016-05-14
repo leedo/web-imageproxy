@@ -56,15 +56,15 @@ sub call {
   my $path = substr($env->{REQUEST_URI}, length($env->{SCRIPT_NAME}));
   my @parts = grep {length $_} split "/", $path;
 
-  if ($parts[0] eq "still") {
+  if (@parts and $parts[0] eq "still") {
     $options{still} = shift @parts;
   }
 
-  if ($parts[0] =~ /^[0-9]+$/) {
+  if (@parts and $parts[0] =~ /^[0-9]+$/) {
     $options{width} = shift @parts;
   }
 
-  if ($parts[0] =~ /^[0-9]+$/) {
+  if (@parts and $parts[0] =~ /^[0-9]+$/) {
     $options{height} = shift @parts;
   }
 
@@ -97,6 +97,15 @@ sub redirect {
     301,
     [Location => $url],
     ['go away'],
+  ];
+}
+
+sub error {
+  my $self = shift;
+  return [
+    500,
+    ['Content-Type', 'text/plain'],
+    ['error processing request']
   ];
 }
 
@@ -141,7 +150,7 @@ sub save_meta {
   my ($dir, $file) = $self->key_to_path("$key-meta");
   make_path $dir if !-e $dir;
 
-  open my $fh, ">", $file or die $!;
+  open my $fh, ">", $file or $self->lock_error($key, $!);
   print $fh encode_json($data);
 }
 
@@ -151,7 +160,7 @@ sub get_meta {
   my $file = $self->key_to_path("$key-meta");
 
   if (-e $file) {
-    open my $fh, "<", $file or die $!;
+    open my $fh, "<", $file or $self->lock_error($key, $!);
     local $/;
     my $data = <$fh>;
     return decode_json($data);
@@ -179,7 +188,7 @@ sub handle_url {
 
     my $file = $self->key_to_path($key);
     if ($meta->{headers} and -e $file) {
-      open my $fh, "<", $file or die $!;
+      open my $fh, "<", $file or $self->lock_error($key, $!);
       return [200, $meta->{headers}, $fh];
     }
   }
@@ -197,7 +206,7 @@ sub download {
 
   my ($dir, $file) = $self->key_to_path($key);
   make_path $dir unless -e $dir;
-  open my $fh, ">", $file or die $!;
+  open my $fh, ">", $file or $self->lock_error($key, $!);
 
   my $length = 0;
   my $is_image = 0;
@@ -278,6 +287,12 @@ sub download {
         "ETag" => $etag,
       ];
 
+      $self->save_meta($key, {
+        headers => $res_headers,
+        etag => $etag,
+        modified => $modified,
+      });
+
       if (!%options) {
         open $fh, "<", $file;
         $self->lock_respond($key, [200, $res_headers, $fh]);
@@ -290,12 +305,6 @@ sub download {
         my $resized_length = (stat($file))[7];
         Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
         Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
-
-        $self->save_meta($key, {
-          headers => $res_headers,
-          etag => $etag,
-          modified => $modified,
-        });
 
         open $fh, "<", $file;
         $self->lock_respond($key,[200, $res_headers, $fh]);
@@ -366,6 +375,13 @@ sub clean_url {
   $path = "http://$path" unless $path =~ /^https?/i;
 
   return $path;
+}
+
+sub lock_error {
+  my ($self, $key, $message) = @_;
+  $self->lock_respond($key, $self->error);
+  warn "error: $message";
+  die;
 }
 
 sub lock_respond {

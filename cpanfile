@@ -18,3 +18,4 @@ requires "Async::Interrupt";
 requires "Guard";
 requires "Time::HiRes";
 requires "AnyEvent::AIO";
+requires "Data::Dump";
