@@ -163,7 +163,7 @@ sub get_meta {
     open my $fh, "<", $file or $self->lock_error($key, $!);
     local $/;
     my $data = <$fh>;
-    return decode_json($data);
+    decode_json($data);
   }
 }
 
@@ -183,12 +183,21 @@ sub handle_url {
 
   if ($meta) { # info cached
     if ($self->is_unchanged($meta, $env)) {
-      return [304, ['ETag' => $meta->{etag}, 'Last-Modified' => $meta->{modified}], []];
+      return [
+        304,
+        [
+          'ETag' => $meta->{etag},
+          'Last-Modified' => $meta->{modified},
+          'X-Cache-Hit' => "true",
+        ],
+        []
+      ];
     }
 
     my $file = $self->key_to_path($key);
     if ($meta->{headers} and -e $file) {
       open my $fh, "<", $file or $self->lock_error($key, $!);
+      push @{ $meta->{headers} }, "X-Cache-Hit", "true";
       return [200, $meta->{headers}, $fh];
     }
   }
