@@ -10,19 +10,18 @@ use HTTP::Date;
 use URI::Escape;
 use Plack::Util;
 
-use File::Spec;
-use File::Path qw/make_path/;
-use List::Util qw/shuffle/;
+use File::Temp qw(tempfile tempdir);
 use JSON::XS;
 
 use List::MoreUtils qw/any/;
 use Digest::SHA1 qw/sha1_hex/;
 
 use Plack::Util;
-use Plack::Util::Accessor qw/cache_root max_size allowed_referers/;
+use Plack::Util::Accessor qw/max_size allowed_referers/;
 
 use parent 'Plack::Component';
 
+my $dir = tempdir();
 our $REQ_HEADERS = {
   "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
   "Referer" => undef,
@@ -34,11 +33,6 @@ sub prepare_app {
   $self->{max_size} = 10485760      unless defined $self->{max_size};
   $self->{allowed_referers} = []    unless defined $self->{allowed_referers};
 
-  $self->{static_dir} = "./static"  unless defined $self->{static_dir};
-  $self->{cache_root} = "./cache"   unless defined $self->{cache_root};
-  make_path $self->{cache_root}     unless -e $self->{cache_root};
-
-  $self->{locks} = {};
   $self->{resizer} = AnyEvent::Fork
     ->new
     ->require('Web::ImageProxy::Resizer')
@@ -116,119 +110,33 @@ sub valid_referer {
   return any {$referer =~ $_} @{$self->allowed_referers};
 }
 
-sub is_unchanged {
-  my ($self, $meta, $env) = @_;
-
-  my $modified = $env->{"HTTP_IF_MODIFIED_SINCE"};
-  my $etag = $env->{"IF_NONE_MATCH"};
-
-  if ($modified) {
-    return $modified eq $meta->{modified}
-  }
-  elsif ($etag) {
-    return $etag eq $meta->{etag};
-  }
-
-  return 0;
-}
-
-sub key_to_path {
-  my ($self, $url) = @_;
-
-  # hash url to get 2 characters for dirs
-  my $hash = sha1_hex($url);
-
-  my $dir = File::Spec->catdir($self->{cache_root}, split("", substr($hash, 0, 2)));
-  my $file = File::Spec->catfile($dir, $hash);
-
-  wantarray ? ($dir, $file) : $file;
-}
-
-sub save_meta {
-  my ($self, $key, $data) = @_;
-
-  my ($dir, $file) = $self->key_to_path("$key-meta");
-  make_path $dir if !-e $dir;
-
-  open my $fh, ">", $file or $self->lock_error($key, $!);
-  print $fh encode_json($data);
-}
-
-sub get_meta {
-  my ($self, $key) = @_;
-
-  my $file = $self->key_to_path("$key-meta");
-
-  if (-e $file) {
-    open my $fh, "<", $file or $self->lock_error($key, $!);
-    local $/;
-    my $data = <$fh>;
-    decode_json($data);
-  }
-}
-
 sub handle_url {
   my ($self, $url, $env, %options) = @_;
-
-  my $key = join "-", $url, %options;
-
-  if ($self->has_lock($key)) { # downloading
-    return sub {
-      my $cb = shift;
-      $self->add_lock_callback($key, $cb);
-    };
-  }
-
-  my $meta = $self->get_meta($key);
-
-  if ($meta) { # info cached
-    if ($self->is_unchanged($meta, $env)) {
-      return [
-        304,
-        [
-          'ETag' => $meta->{etag},
-          'Last-Modified' => $meta->{modified},
-          'X-Cache-Hit' => "true",
-        ],
-        []
-      ];
-    }
-
-    my $file = $self->key_to_path($key);
-    if ($meta->{headers} and -e $file) {
-      open my $fh, "<", $file or $self->lock_error($key, $!);
-      push @{ $meta->{headers} }, "X-Cache-Hit", "true";
-      return [200, $meta->{headers}, $fh];
-    }
-  }
-
-  return sub { # new download
+  return sub {
     my $cb = shift;
-    $self->add_lock_callback($key, $cb); 
-    $self->download($url, $key, %options);
+    $self->download($url, $cb, %options);
   };
 
 }
 
 sub download {
-  my ($self, $url, $key, %options) = @_;
-
-  my ($dir, $file) = $self->key_to_path($key);
-  make_path $dir unless -e $dir;
-  open my $fh, ">", $file or $self->lock_error($key, $!);
+  my ($self, $url, $cb, %options) = @_;
 
   my $length = 0;
   my $is_image = 0;
   my $image_header;
+  my ($fh, $file);
 
   http_get $url,
     headers => $REQ_HEADERS,
-    on_header => sub {$self->check_headers(@_, $key)},
+    on_header => sub {$self->check_headers(@_, $cb)},
     timeout => 60,
     on_body => sub {
       my ($data, $headers) = @_;
 
-      return 1 unless $headers->{Status} == 200;
+      if ($headers->{Status} != 200) {
+        return 1;
+      }
 
       $length += length $data;
 
@@ -239,12 +147,12 @@ sub download {
           if (my $mime = $self->get_mime_type($image_header)) {
             $is_image = 1;
             $headers->{'content-type'} = $mime;
+            ($fh, $file) = tempfile( DIR => $dir );
             print $fh $image_header;
             $image_header = '';
           }
           else {
-            $self->lock_respond($key, $self->not_found);
-            unlink $file;
+            $cb->($self->not_found);
             return 0;
           }
         }
@@ -252,7 +160,7 @@ sub download {
       }
 
       if ($length > $self->max_size) {
-        $self->lock_respond($key, $self->not_found);
+        $cb->($self->not_found);
         unlink $file;
         return 0;
       }
@@ -266,20 +174,19 @@ sub download {
 
       if ($headers->{Status} != 200) {
         print STDERR "got $headers->{Status} for $url: $headers->{Reason}\n";
-        $self->lock_respond($key, $self->not_found);
-        return;
+        return $cb->($self->not_found);
       }
 
       # the file is under 1K so nothing has been written
       if (!$is_image) {
         if (my $mime = $self->get_mime_type($image_header)) {
           $headers->{'content-type'} = $mime;
+          ($fh, $file) = tempfile( DIR => $dir );
           print $fh $image_header;
         }
         else {
-          $self->lock_respond($key, $self->not_found);
           unlink $file;
-          return;
+          return $cb->($self->not_found);
         }
       }
 
@@ -291,20 +198,14 @@ sub download {
       my $res_headers = [
         "Content-Type" => $headers->{'content-type'},
         "Content-Length" => $length,
-        "Cache-Control" => "public, max-age=86400",
         "Last-Modified" => $modified,
         "ETag" => $etag,
       ];
 
-      $self->save_meta($key, {
-        headers => $res_headers,
-        etag => $etag,
-        modified => $modified,
-      });
-
       if (!%options) {
-        open $fh, "<", $file;
-        $self->lock_respond($key, [200, $res_headers, $fh]);
+        open my $fh, "<", $file;
+        $cb->([200, $res_headers, $fh]);
+        unlink $file;
         return;
       }
 
@@ -315,24 +216,23 @@ sub download {
         Plack::Util::header_set($res_headers, "Content-Length", $resized_length);
         Plack::Util::header_push($res_headers, "X-Image-Original-Length", $length);
 
-        open $fh, "<", $file;
-        $self->lock_respond($key,[200, $res_headers, $fh]);
+        open my $fh, "<", $file;
+        $cb->([200, $res_headers, $fh]);
+        unlink $file;
       });
     };
 }
 
 sub check_headers {
-  my ($self, $headers, $key) = @_;
+  my ($self, $headers, $cb) = @_;
   my ($length, $type) = @$headers{'content-length', 'content-type'};
 
   if ($headers->{Status} != 200) {
-    print STDERR "got $headers->{Status} for $key: $headers->{Reason}\n";
-    $self->lock_respond($key, $self->not_found);
     return 0;
   }
 
   if ($length and $length =~ /^\d+$/ and $length > $self->max_size) {
-    $self->lock_respond($key, $self->not_found);
+    $cb->($self->not_found);
     return 0;
   }
 
@@ -384,48 +284,6 @@ sub clean_url {
   $path = "http://$path" unless $path =~ /^https?/i;
 
   return $path;
-}
-
-sub lock_error {
-  my ($self, $key, $message) = @_;
-  $self->lock_respond($key, $self->error);
-  warn "error: $message";
-  die;
-}
-
-sub lock_respond {
-  my ($self, $url, $res) = @_;
-  if ($self->has_lock($url)) {
-    for my $lock_cb ($self->get_lock_callbacks($url)) {
-      $lock_cb->($res);
-    }
-    $self->remove_lock($url);
-  }
-}
-
-sub has_lock {
-  my ($self, $url) = @_;
-  exists $self->{locks}->{$url};
-}
-
-sub get_lock_callbacks {
-  my ($self, $url) = @_;
-  @{$self->{locks}->{$url}};
-}
-
-sub add_lock_callback {
-  my ($self, $url, $cb) = @_;
-  if ($self->has_lock($url)) {
-    push @{$self->{locks}->{$url}}, $cb;
-  }
-  else {
-    $self->{locks}->{$url} = [$cb];
-  }
-}
-
-sub remove_lock {
-  my ($self, $url) = @_;
-  delete $self->{locks}->{$url};
 }
 
 1;
