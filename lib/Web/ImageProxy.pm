@@ -255,6 +255,11 @@ sub get_mime_type {
   elsif ($data =~ m[^BM]) {
     return q{image/bmp};
   }
+  elsif (my @webp = unpack("A4IA4", $data)) {
+    if ($webp[0] eq 'RIFF' && $webp[2] eq 'WEBP') {
+        return q{image/webp};
+    }
+  }
 
   if (length $data > 1) {
     $substr = substr($data, 1, 1024);
