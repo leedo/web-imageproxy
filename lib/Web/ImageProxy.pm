@@ -23,7 +23,7 @@ use parent 'Plack::Component';
 
 my $dir = tempdir();
 our $REQ_HEADERS = {
-  "User-Agent" => "Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en) AppleWebKit/419.3 (KHTML, like Gecko) Safari/419.3",
+  "User-Agent" => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0",
   "Referer" => undef,
 };
 
@@ -127,8 +127,17 @@ sub download {
   my $image_header;
   my ($fh, $file);
 
+  my %extra;
+
+  if ($url =~ m{^https?://i\.imgur\.com}) {
+    $extra{Host} = "i.imgur.com";
+    $url =~ s{^(https?)://i\.imgur\.com}{$1://noembed.com};
+  }
+
+  warn $url;
+
   http_get $url,
-    headers => $REQ_HEADERS,
+    headers => { %$REQ_HEADERS, %extra },
     on_header => sub {$self->check_headers(@_, $cb)},
     timeout => 60,
     on_body => sub {
@@ -228,11 +237,11 @@ sub check_headers {
   my ($length, $type) = @$headers{'content-length', 'content-type'};
 
   if ($headers->{Status} != 200) {
+    warn $headers->{Status};
     return 0;
   }
 
   if ($length and $length =~ /^\d+$/ and $length > $self->max_size) {
-    $cb->($self->not_found);
     return 0;
   }
 
