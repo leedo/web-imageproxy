@@ -134,8 +134,6 @@ sub download {
     $url =~ s{^(https?)://i\.imgur\.com}{$1://noembed.com};
   }
 
-  warn $url;
-
   http_get $url,
     headers => { %$REQ_HEADERS, %extra },
     on_header => sub {$self->check_headers(@_, $cb)},
@@ -237,7 +235,6 @@ sub check_headers {
   my ($length, $type) = @$headers{'content-length', 'content-type'};
 
   if ($headers->{Status} != 200) {
-    warn $headers->{Status};
     return 0;
   }
 
