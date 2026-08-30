@@ -62,4 +62,4 @@ COPY --from=builder /usr/local/lib/* /usr/local/lib
 COPY --from=builder /opt/web-imageproxy/local /opt/web-imageproxy/local
 COPY --from=builder /opt/perl-${PERL_VERSION} /opt/perl-${PERL_VERSION}
 
-CMD ["perl", "-Ilocal/lib/perl5", "local/bin/plackup", "--server", "Twiggy", "-Ilib", "--listen", ":5007", "app.psgi"]
+CMD ["perl", "-Ilocal/lib/perl5", "local/bin/plackup", "-E", "prod", "--server", "Twiggy", "-Ilib", "--listen", ":5007", "app.psgi"]
