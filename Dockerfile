@@ -6,6 +6,8 @@ FROM ubuntu:latest AS builder
 ARG IMAGEMAGICK_VERSION
 ARG PERL_VERSION
 
+WORKDIR /opt/web-imageproxy
+
 RUN apt-get update && apt-get -y install \
     curl \
     build-essential \
