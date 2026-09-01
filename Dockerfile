@@ -17,18 +17,38 @@ RUN apt-get update && apt-get -y install \
     cpanminus \
     libgif-dev \
     libpng-dev \
-    libjpeg8-dev \
-    libheif-dev \
     libde265-dev \
-    libwebp-dev \
+    libdjvulibre-dev \
+    libfftw3-dev \
+    libghc-bzlib-dev \
+    libgoogle-perftools-dev \
+    libgraphviz-dev \
+    libgs-dev \
+    libheif-dev \
+    libjbig-dev \
+    libjemalloc-dev \
+    libjpeg-dev \
+    liblcms2-dev \
+    liblqr-1-0-dev \
+    liblzma-dev \
+    libopenexr-dev \
+    libopenjp2-7-dev \
+    libpango1.0-dev \
+    libraqm-dev \
+    libraw-dev \
+    librsvg2-dev \
     libtiff-dev \
-    libdav1d-dev \
+    libwebp-dev \
+    libwmf-dev \
+    libxml2-dev \
+    libzip-dev \
+    libzstd-dev
     libtool \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -s -L https://github.com/ImageMagick/ImageMagick/archive/refs/tags/${IMAGEMAGICK_VERSION}.tar.gz | tar -xvzf - -C /tmp
 RUN cd /tmp/ImageMagick-${IMAGEMAGICK_VERSION} \
-    && ./configure --with-png=yes --with-jpeg=yes --with-heic=yes --with-webp=yes \
+    && ./configure --with-png=yes --with-jpeg=yes --with-heic=yes --with-webp=yes   --with-lcms=yes   --with-lzma=yes \ --with-zlib=yes --with-zstd=yes --with-gcc-arch=native \
     && make -j$(nproc) \
     && make install
 
@@ -65,7 +85,6 @@ RUN apt-get update && apt-get -y install \
     libde265-0 \
     libwebp7 \
     libtiff6 \
-    libdav1d7 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/web-imageproxy
