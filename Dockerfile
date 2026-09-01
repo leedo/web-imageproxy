@@ -22,6 +22,7 @@ RUN apt-get update && apt-get -y install \
     libde265-dev \
     libwebp-dev \
     libtiff-dev \
+    libdav1d-dev \
     libtool \
     && rm -rf /var/lib/apt/lists/*
 
@@ -64,6 +65,7 @@ RUN apt-get update && apt-get -y install \
     libde265-0 \
     libwebp7 \
     libtiff6 \
+    libdav1d7 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/web-imageproxy
