@@ -12,18 +12,12 @@ RUN apt-get update && apt-get -y install \
     curl \
     build-essential \
     libssl-dev \
-    zlib1g-dev \
     perl \
     cpanminus \
+    zlib1g-dev \
     libgif-dev \
     libpng-dev \
     libde265-dev \
-    libdjvulibre-dev \
-    libfftw3-dev \
-    libghc-bzlib-dev \
-    libgoogle-perftools-dev \
-    libgraphviz-dev \
-    libgs-dev \
     libheif-dev \
     libjbig-dev \
     libjemalloc-dev \
@@ -31,15 +25,10 @@ RUN apt-get update && apt-get -y install \
     liblcms2-dev \
     liblqr-1-0-dev \
     liblzma-dev \
-    libopenexr-dev \
-    libopenjp2-7-dev \
-    libpango1.0-dev \
-    libraqm-dev \
     libraw-dev \
     librsvg2-dev \
     libtiff-dev \
     libwebp-dev \
-    libwmf-dev \
     libxml2-dev \
     libzip-dev \
     libzstd-dev \
@@ -87,15 +76,10 @@ ENV PATH="/opt/perl-${PERL_VERSION}/bin:${PATH}"
 RUN apt-get update && apt-get -y install \
     libgomp1 \
     libssl3t64 \
+    zlib1g-dev \
     libgif-dev \
     libpng-dev \
     libde265-dev \
-    libdjvulibre-dev \
-    libfftw3-dev \
-    libghc-bzlib-dev \
-    libgoogle-perftools-dev \
-    libgraphviz-dev \
-    libgs-dev \
     libheif-dev \
     libjbig-dev \
     libjemalloc-dev \
@@ -103,15 +87,10 @@ RUN apt-get update && apt-get -y install \
     liblcms2-dev \
     liblqr-1-0-dev \
     liblzma-dev \
-    libopenexr-dev \
-    libopenjp2-7-dev \
-    libpango1.0-dev \
-    libraqm-dev \
     libraw-dev \
     librsvg2-dev \
     libtiff-dev \
     libwebp-dev \
-    libwmf-dev \
     libxml2-dev \
     libzip-dev \
     libzstd-dev \
