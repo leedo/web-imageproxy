@@ -42,7 +42,7 @@ RUN apt-get update && apt-get -y install \
     libwmf-dev \
     libxml2-dev \
     libzip-dev \
-    libzstd-dev
+    libzstd-dev \
     libtool \
     && rm -rf /var/lib/apt/lists/*
 
