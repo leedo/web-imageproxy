@@ -159,7 +159,6 @@ sub download {
             $image_header = '';
           }
           else {
-            $cb->($self->not_found);
             return 0;
           }
         }
@@ -167,7 +166,6 @@ sub download {
       }
 
       if ($length > $self->max_size) {
-        $cb->($self->not_found);
         unlink $file;
         return 0;
       }
@@ -261,13 +259,12 @@ sub get_mime_type {
   elsif ($data =~ m[^BM]) {
     return q{image/bmp};
   }
-  elsif (my @webp = unpack("A4IA4", $data)) {
-    if ($webp[0] eq 'RIFF' && $webp[2] eq 'WEBP') {
+  elsif (my @ftyp = unpack("A4IA4", $data)) {
+    if ($ftyp[0] eq 'RIFF' && $ftyp[2] eq 'WEBP') {
         return q{image/webp};
+    } elsif ($ftyp[2] eq 'heic') {
+      return q{image/heic};
     }
-  }
-  elsif ($data =~ m[^.{4}ftypheic]) {
-    return q{image/heic};
   }
 
   if (length $data > 1) {
