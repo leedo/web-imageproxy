@@ -18,11 +18,13 @@ RUN apt-get update && apt-get -y install \
     libgif-dev \
     libpng-dev \
     libjpeg8-dev \
+    libheif-dev \
+    libde265-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -s -L https://github.com/ImageMagick/ImageMagick/archive/refs/tags/${IMAGEMAGICK_VERSION}.tar.gz | tar -xvzf - -C /tmp
 RUN cd /tmp/ImageMagick-${IMAGEMAGICK_VERSION} \
-    && ./configure --with-png=yes --with-jpeg=yes \
+    && ./configure --with-png=yes --with-jpeg=yes --with-heic=yes \
     && make \
     && make install
 
@@ -55,6 +57,8 @@ RUN apt-get update && apt-get -y install \
     libjpeg8 \
     libgif7 \
     libpng16-16t64 \
+    libheif1 \
+    libde265-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/web-imageproxy
