@@ -19,17 +19,13 @@ RUN apt-get update && apt-get -y install \
     libpng-dev \
     libde265-dev \
     libheif-dev \
-    libjbig-dev \
     libjemalloc-dev \
     libjpeg-dev \
-    liblcms2-dev \
-    liblqr-1-0-dev \
     liblzma-dev \
     libraw-dev \
     librsvg2-dev \
     libtiff-dev \
     libwebp-dev \
-    libxml2-dev \
     libzip-dev \
     libzstd-dev \
     libtool \
@@ -42,7 +38,6 @@ RUN cd /tmp/ImageMagick-${IMAGEMAGICK_VERSION} \
       --with-jpeg=yes \
       --with-heic=yes \
       --with-webp=yes \
-      --with-lcms=yes \
       --with-lzma=yes \
       --with-zlib=yes \
       --with-zstd=yes \
@@ -81,17 +76,13 @@ RUN apt-get update && apt-get -y install \
     libpng-dev \
     libde265-dev \
     libheif-dev \
-    libjbig-dev \
     libjemalloc-dev \
     libjpeg-dev \
-    liblcms2-dev \
-    liblqr-1-0-dev \
     liblzma-dev \
     libraw-dev \
     librsvg2-dev \
     libtiff-dev \
     libwebp-dev \
-    libxml2-dev \
     libzip-dev \
     libzstd-dev \
     libtool \
