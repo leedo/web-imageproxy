@@ -266,6 +266,9 @@ sub get_mime_type {
         return q{image/webp};
     }
   }
+  elsif ($data =~ m[^.{4}ftypheic]) {
+    return q{image/heic};
+  }
 
   if (length $data > 1) {
     $substr = substr($data, 1, 1024);
