@@ -48,7 +48,16 @@ RUN apt-get update && apt-get -y install \
 
 RUN curl -s -L https://github.com/ImageMagick/ImageMagick/archive/refs/tags/${IMAGEMAGICK_VERSION}.tar.gz | tar -xvzf - -C /tmp
 RUN cd /tmp/ImageMagick-${IMAGEMAGICK_VERSION} \
-    && ./configure --with-png=yes --with-jpeg=yes --with-heic=yes --with-webp=yes   --with-lcms=yes   --with-lzma=yes \ --with-zlib=yes --with-zstd=yes --with-gcc-arch=native \
+    && ./configure \
+      --with-png=yes \
+      --with-jpeg=yes \
+      --with-heic=yes \
+      --with-webp=yes \
+      --with-lcms=yes \
+      --with-lzma=yes \
+      --with-zlib=yes \
+      --with-zstd=yes \
+      --with-gcc-arch=native \
     && make -j$(nproc) \
     && make install
 
