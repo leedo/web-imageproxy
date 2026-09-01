@@ -87,13 +87,35 @@ ENV PATH="/opt/perl-${PERL_VERSION}/bin:${PATH}"
 RUN apt-get update && apt-get -y install \
     libgomp1 \
     libssl3t64 \
-    libjpeg8 \
-    libgif7 \
-    libpng16-16t64 \
-    libheif1 \
-    libde265-0 \
-    libwebp7 \
-    libtiff6 \
+    libgif-dev \
+    libpng-dev \
+    libde265-dev \
+    libdjvulibre-dev \
+    libfftw3-dev \
+    libghc-bzlib-dev \
+    libgoogle-perftools-dev \
+    libgraphviz-dev \
+    libgs-dev \
+    libheif-dev \
+    libjbig-dev \
+    libjemalloc-dev \
+    libjpeg-dev \
+    liblcms2-dev \
+    liblqr-1-0-dev \
+    liblzma-dev \
+    libopenexr-dev \
+    libopenjp2-7-dev \
+    libpango1.0-dev \
+    libraqm-dev \
+    libraw-dev \
+    librsvg2-dev \
+    libtiff-dev \
+    libwebp-dev \
+    libwmf-dev \
+    libxml2-dev \
+    libzip-dev \
+    libzstd-dev \
+    libtool \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/web-imageproxy
