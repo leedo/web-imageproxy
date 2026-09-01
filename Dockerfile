@@ -28,7 +28,7 @@ RUN apt-get update && apt-get -y install \
 RUN curl -s -L https://github.com/ImageMagick/ImageMagick/archive/refs/tags/${IMAGEMAGICK_VERSION}.tar.gz | tar -xvzf - -C /tmp
 RUN cd /tmp/ImageMagick-${IMAGEMAGICK_VERSION} \
     && ./configure --with-png=yes --with-jpeg=yes --with-heic=yes --with-webp=yes \
-    && make \
+    && make -j$(nproc) \
     && make install
 
 RUN cpanm -nq Perl::Build
