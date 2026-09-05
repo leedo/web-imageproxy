@@ -42,11 +42,14 @@ RUN cd /tmp/ImageMagick-${IMAGEMAGICK_VERSION} \
       --with-zlib=yes \
       --with-zstd=yes \
       --with-gcc-arch=native \
+      --disable-static \
+      --disable-docs \
+      --without-magick-plus-plus \
     && make -j$(nproc) \
-    && make install
+    && make install-strip
 
 RUN cpanm -nq Perl::Build
-RUN perl-build -j4 $PERL_VERSION /opt/perl-$PERL_VERSION
+RUN perl-build --noman -j4 $PERL_VERSION /opt/perl-$PERL_VERSION
 
 ENV PATH="/opt/perl-${PERL_VERSION}/bin:${PATH}"
 
@@ -68,28 +71,37 @@ WORKDIR /opt/web-imageproxy
 
 ENV PATH="/opt/perl-${PERL_VERSION}/bin:${PATH}"
 
-RUN apt-get -y update && apt-get -y install \
+RUN apt-get -y update && apt-get -y install --no-install-recommends \
     libgomp1 \
     libssl3t64 \
-    zlib1g-dev \
-    libgif-dev \
-    libpng-dev \
-    libde265-dev \
-    libheif-dev \
-    libjemalloc-dev \
-    libjpeg-dev \
-    liblzma-dev \
-    libraw-dev \
-    librsvg2-dev \
-    libtiff-dev \
-    libwebp-dev \
-    libzip-dev \
-    libzstd-dev \
+    zlib1g \
+    libpng16-16t64 \
+    libheif1 \
+    libjpeg-turbo8 \
+    liblzma5 \
+    libraw23t64 \
+    libtiff6 \
+    libwebp7 \
+    libwebpdemux2 \
+    libwebpmux3 \
+    libzip5 \
+    libzstd1 \
+    liblcms2-2 \
+    libxml2-16 \
+    libfreetype6 \
+    libfontconfig1 \
+    libcairo2 \
+    libpangocairo-1.0-0 \
+    libx11-6 \
+    libxext6 \
+    libjemalloc2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/web-imageproxy
-COPY --from=builder /usr/local/lib/* /usr/local/lib
+COPY --from=builder /usr/local/lib/ /usr/local/lib/
 COPY --from=builder /opt/web-imageproxy/local /opt/web-imageproxy/local
 COPY --from=builder /opt/perl-${PERL_VERSION} /opt/perl-${PERL_VERSION}
+
+RUN ldconfig
 
 CMD ["perl", "-Ilocal/lib/perl5", "local/bin/plackup", "-E", "prod", "--server", "Twiggy", "-Ilib", "--listen", ":5007", "app.psgi"]
