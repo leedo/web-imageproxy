@@ -8,7 +8,7 @@ ARG PERL_VERSION
 
 WORKDIR /opt/web-imageproxy
 
-RUN apt-get update && apt-get -y install \
+RUN apt-get -y update && apt-get -y install \
     curl \
     build-essential \
     libssl-dev \
@@ -68,7 +68,7 @@ WORKDIR /opt/web-imageproxy
 
 ENV PATH="/opt/perl-${PERL_VERSION}/bin:${PATH}"
 
-RUN apt-get update && apt-get -y install \
+RUN apt-get -y update && apt-get -y install \
     libgomp1 \
     libssl3t64 \
     zlib1g-dev \
@@ -85,7 +85,6 @@ RUN apt-get update && apt-get -y install \
     libwebp-dev \
     libzip-dev \
     libzstd-dev \
-    libtool \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/web-imageproxy
