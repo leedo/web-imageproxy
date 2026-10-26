@@ -173,3 +173,15 @@ func TestHandlerBadPath404(t *testing.T) {
 		assertNotFound(t, serve(h, p))
 	}
 }
+
+func TestHandlerSendsUserAgent(t *testing.T) {
+	var ua string
+	h, _ := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.Write(pngBytes(10))
+	})
+	serve(h, "/i/x.com/a.png")
+	if want := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0"; ua != want {
+		t.Errorf("User-Agent = %q, want %q", ua, want)
+	}
+}

@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// UserAgent is sent to imagor, which forwards it to the origin
+// (HTTP_LOADER_FORWARD_HEADERS=User-Agent).
+const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0"
+
 // Handler serves the /i/ API by proxying signed requests to imagor.
 type Handler struct {
 	ImagorURL string
@@ -32,6 +36,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
+	req.Header.Set("User-Agent", UserAgent)
 	res, err := h.client().Do(req)
 	if err != nil {
 		h.logger().Printf("imagor request failed for %s: %v", imageURL, err)
