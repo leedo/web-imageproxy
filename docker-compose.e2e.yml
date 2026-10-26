@@ -1,0 +1,23 @@
+# imagor for end-to-end tests: exposed on localhost and allowed to reach the
+# test origin on the host, which the production network blocks forbid.
+services:
+  imagor:
+    image: shumc/imagor:1.9.14
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      IMAGOR_SECRET: e2e
+      HTTP_LOADER_MAX_ALLOWED_SIZE: "10485760"
+      HTTP_LOADER_BLOCK_LOOPBACK_NETWORKS: "0"
+      HTTP_LOADER_BLOCK_PRIVATE_NETWORKS: "0"
+      HTTP_LOADER_BLOCK_LINK_LOCAL_NETWORKS: "1"
+      HTTP_LOADER_OVERRIDE_RESPONSE_HEADERS: ETag,Last-Modified
+      HTTP_LOADER_FORWARD_HEADERS: User-Agent
+      IMAGOR_REQUEST_TIMEOUT: 60s
+      IMAGOR_RESPONSE_RAW_ON_ERROR: "1"
+      IMAGOR_PROCESS_CONCURRENCY: "4"
+      IMAGOR_PROCESS_QUEUE_SIZE: "50"
+      VIPS_CONCURRENCY: "1"
+      VIPS_MAX_RESOLUTION: "50000000"

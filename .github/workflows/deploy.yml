@@ -21,6 +21,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Start imagor for end-to-end tests
+        run: |
+          docker compose -f docker-compose.e2e.yml up -d
+          timeout 60 sh -c 'until curl -sf localhost:8000/healthcheck; do sleep 1; done'
+
+      - name: End-to-end tests
+        run: go test -tags e2e ./internal/proxy/
+
       # Set up Docker Buildx for advanced build capabilities (like caching)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
