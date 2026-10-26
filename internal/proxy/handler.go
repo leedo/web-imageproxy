@@ -15,6 +15,9 @@ import (
 // (HTTP_LOADER_FORWARD_HEADERS=User-Agent).
 const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0"
 
+// MaxSize is the largest response body served, matching the old 10MB cap.
+const MaxSize = 10485760
+
 // Handler serves the /i/ API by proxying signed requests to imagor.
 type Handler struct {
 	ImagorURL string
@@ -31,17 +34,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), "GET", SignedURL(h.ImagorURL, h.Secret, opts, imageURL), nil)
-	if err != nil {
-		notFound(w)
-		return
-	}
-	req.Header.Set("User-Agent", UserAgent)
-	res, err := h.client().Do(req)
+	res, err := h.fetch(r, opts, imageURL)
 	if err != nil {
 		h.logger().Printf("imagor request failed for %s: %v", imageURL, err)
 		unavailable(w)
 		return
+	}
+	// imagor failed to process the image (too large, corrupt, unsupported):
+	// serve the original instead, as the old service did.
+	if res.StatusCode != http.StatusOK && opts != (Options{}) && fallbackStatus(res.StatusCode) {
+		res.Body.Close()
+		h.logger().Printf("got %d processing %s, serving original", res.StatusCode, imageURL)
+		res, err = h.fetch(r, Options{}, imageURL)
+		if err != nil {
+			h.logger().Printf("imagor request failed for %s: %v", imageURL, err)
+			unavailable(w)
+			return
+		}
 	}
 	defer res.Body.Close()
 
@@ -53,6 +62,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		h.logger().Printf("got %d for %s", res.StatusCode, imageURL)
+		notFound(w)
+		return
+	}
+
+	if res.ContentLength > MaxSize {
+		h.logger().Printf("too large (%d bytes): %s", res.ContentLength, imageURL)
 		notFound(w)
 		return
 	}
@@ -90,7 +105,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hdr.Set("Last-Modified", modified)
 
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, body)
+	n, _ := io.Copy(w, io.LimitReader(body, MaxSize))
+	if n == MaxSize {
+		if _, err := body.ReadByte(); err == nil {
+			// headers are already sent; abort so a truncated body isn't cached
+			h.logger().Printf("too large (streamed > %d bytes): %s", MaxSize, imageURL)
+			panic(http.ErrAbortHandler)
+		}
+	}
+}
+
+func (h *Handler) fetch(r *http.Request, opts Options, imageURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(r.Context(), "GET", SignedURL(h.ImagorURL, h.Secret, opts, imageURL), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	return h.client().Do(req)
+}
+
+// fallbackStatus reports whether a failed processed request should be
+// retried as raw. 404 means the origin is missing the image; 429 and 503
+// mean imagor is overloaded.
+func fallbackStatus(code int) bool {
+	switch code {
+	case http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return false
+	}
+	return true
 }
 
 func (h *Handler) client() *http.Client {

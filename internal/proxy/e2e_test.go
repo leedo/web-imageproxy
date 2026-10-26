@@ -38,6 +38,16 @@ func encodePNG(t *testing.T, w, h int) []byte {
 	return b.Bytes()
 }
 
+// encodeGrayPNG returns a blank PNG that compresses to almost nothing, for
+// exceeding imagor's resolution cap without a large download.
+func encodeGrayPNG(t *testing.T, w, h int) []byte {
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
 func encodeAnimGIF(t *testing.T) []byte {
 	var g gif.GIF
 	for i := 0; i < 3; i++ {
@@ -96,12 +106,14 @@ func setupE2E(t *testing.T) *e2eEnv {
 	t.Helper()
 	env := &e2eEnv{}
 	files := map[string][]byte{
-		"/big.png":   encodePNG(t, 800, 600),
-		"/small.png": encodePNG(t, 50, 40),
-		"/anim.gif":  encodeAnimGIF(t),
-		"/rot.jpg":   encodeRotatedJPEG(t),
-		"/page.html": []byte("<html><body>hello</body></html>"),
-		"/huge.png":  append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 11<<20)...),
+		"/big.png":     encodePNG(t, 800, 600),
+		"/small.png":   encodePNG(t, 50, 40),
+		"/anim.gif":    encodeAnimGIF(t),
+		"/rot.jpg":     encodeRotatedJPEG(t),
+		"/page.html":   []byte("<html><body>hello</body></html>"),
+		"/huge.png":    append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 11<<20)...),
+		"/60mp.png":    encodeGrayPNG(t, 10000, 6000),
+		"/corrupt.png": append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("junk"), 100)...),
 	}
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
@@ -115,6 +127,15 @@ func setupE2E(t *testing.T) *e2eEnv {
 				env.userAgent = r.Header.Get("User-Agent")
 				env.mu.Unlock()
 				w.Header().Set("ETag", `"origin-etag"`)
+			}
+			if r.URL.Path == "/chunked.png" {
+				// no Content-Length: imagor can't apply its size cap up front
+				w.Write([]byte("\x89PNG\r\n\x1a\n"))
+				chunk := make([]byte, 1<<20)
+				for i := 0; i < 11; i++ {
+					w.Write(chunk)
+				}
+				return
 			}
 			body, ok := files[r.URL.Path]
 			if !ok {
@@ -221,7 +242,17 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
-	for _, p := range []string{"/page.html", "/missing.png", "/huge.png"} {
+	// imagor can't process these; the original is served, as Perl did
+	for _, p := range []string{"/i/200/" + env.origin + "/60mp.png", "/i/still/" + env.origin + "/60mp.png", "/i/200/" + env.origin + "/corrupt.png"} {
+		t.Run("fallback "+p, func(t *testing.T) {
+			rec := env.get(t, p)
+			if rec.Code != 200 || rec.Header().Get("Content-Type") != "image/png" {
+				t.Errorf("got %d %s, want 200 image/png", rec.Code, rec.Header().Get("Content-Type"))
+			}
+		})
+	}
+
+	for _, p := range []string{"/page.html", "/missing.png", "/huge.png", "/chunked.png"} {
 		for _, prefix := range []string{"/i/", "/i/200/"} {
 			t.Run(prefix+p, func(t *testing.T) {
 				assertNotFound(t, env.get(t, prefix+env.origin+p))

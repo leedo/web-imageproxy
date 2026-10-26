@@ -185,3 +185,71 @@ func TestHandlerSendsUserAgent(t *testing.T) {
 		t.Errorf("User-Agent = %q, want %q", ua, want)
 	}
 }
+
+func TestHandlerFallsBackToRawOnProcessingError(t *testing.T) {
+	body := pngBytes(100)
+	for _, code := range []int{406, 422, 500} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			var paths []string
+			h, _ := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.RequestURI)
+				if bytes.Contains([]byte(r.RequestURI), []byte("filters:raw()")) {
+					w.Write(body)
+					return
+				}
+				w.WriteHeader(code)
+			})
+			rec := serve(h, "/i/still/200/x.com/a.png")
+			if rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), body) {
+				t.Fatalf("got %d, want 200 with original body", rec.Code)
+			}
+			if len(paths) != 2 {
+				t.Errorf("imagor requests = %d, want 2", len(paths))
+			}
+		})
+	}
+}
+
+func TestHandlerNoFallbackOnUpstream404(t *testing.T) {
+	calls := 0
+	h, _ := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(404)
+	})
+	assertNotFound(t, serve(h, "/i/200/x.com/a.png"))
+	if calls != 1 {
+		t.Errorf("imagor requests = %d, want 1", calls)
+	}
+}
+
+func TestHandlerRejectsOversizeContentLength(t *testing.T) {
+	h, _ := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(MaxSize+1))
+		w.Write(pngBytes(10))
+	})
+	assertNotFound(t, serve(h, "/i/x.com/a.png"))
+}
+
+func TestHandlerAbortsOversizeStream(t *testing.T) {
+	h, _ := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write(pngBytes(SniffLen))
+		chunk := make([]byte, 1<<20)
+		for i := 0; i < 11; i++ {
+			w.Write(chunk)
+		}
+	})
+	front := httptest.NewServer(h)
+	defer front.Close()
+	res, err := http.Get(front.URL + "/i/x.com/a.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	n, err := io.Copy(io.Discard, res.Body)
+	if err == nil {
+		t.Errorf("read %d bytes without error, want aborted stream", n)
+	}
+	if n > MaxSize {
+		t.Errorf("read %d bytes, want at most %d", n, MaxSize)
+	}
+}

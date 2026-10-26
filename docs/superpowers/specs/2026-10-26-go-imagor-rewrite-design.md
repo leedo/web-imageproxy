@@ -165,7 +165,6 @@ HTTP_LOADER_BLOCK_PRIVATE_NETWORKS=1
 HTTP_LOADER_BLOCK_LINK_LOCAL_NETWORKS=1
 HTTP_LOADER_OVERRIDE_RESPONSE_HEADERS=ETag,Last-Modified
 IMAGOR_REQUEST_TIMEOUT=60s            # old service used 60s
-IMAGOR_RESPONSE_RAW_ON_ERROR=1        # serve original if processing fails (old behavior; also covers HEIC)
 IMAGOR_PROCESS_CONCURRENCY=<nCPU>
 IMAGOR_PROCESS_QUEUE_SIZE=<small, e.g. 50>
 VIPS_CONCURRENCY=1
@@ -177,9 +176,17 @@ Upstream fetches send the old Firefox User-Agent and no Referer. The builder
 needs to find imagor's setting for the default User-Agent. It is not in the
 docs pages read so far; likely `HTTP_LOADER_DEFAULT_USER_AGENT`.
 
-HEIC: `IMAGOR_RESPONSE_RAW_ON_ERROR` means a resize request for HEIC either
-works, if the image's libvips has libheif, or falls back to the original. Both
-are acceptable now.
+Processing failures: when a resize or `still` request fails in imagor (any
+status except 404, 429 and 503; for example over `VIPS_MAX_RESOLUTION`,
+corrupt, or HEIC without an encoder), the translator re-requests the image
+with `filters:raw()` and serves the original, as the old service did.
+`IMAGOR_RESPONSE_RAW_ON_ERROR` is not used, because imagor returns that
+fallback body with the error status.
+
+Size cap: the translator returns a 404 if imagor's Content-Length is over
+10485760, and aborts the connection if a streamed body goes past that. imagor
+buffers whole origin bodies in memory, and a chunked body gets past its own
+cap, so the imagor container runs with a memory limit.
 
 ### Layout
 
